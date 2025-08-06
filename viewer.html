@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>作品集查看器</title>
+    <link rel="stylesheet" href="assets/web/viewer.css">
+    <style>
+        /* 自定义样式 */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #1a1a2e;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .toolbar {
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            position: relative;
+            z-index: 10;
+        }
+        
+        .toolbar button {
+            background: rgba(255, 255, 255, 0.15);
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 30px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(5px);
+        }
+        
+        .toolbar button:hover {
+            background: rgba(255, 255, 255, 0.25);
+            transform: translateY(-2px);
+        }
+        
+        .page-info {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 8px 20px;
+            border-radius: 30px;
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+        
+        #viewerContainer {
+            position: absolute;
+            top: 60px;
+            bottom: 0;
+            width: 100%;
+            overflow: auto;
+        }
+        
+        /* 翻页区域 - 宽度缩小至五分之二 (20%) */
+        .page-nav-area {
+            position: absolute;
+            top: 60px;
+            bottom: 0;
+            width: 10%; /* 从25%缩小到20% */
+            z-index: 5;
+            cursor: pointer;
+            opacity: 0.3;
+            transition: opacity 0.3s ease;
+        }
+        
+        .prev-area {
+            left: 0;
+        }
+        
+        .next-area {
+            right: 0;
+        }
+        
+        .page-nav-area:hover {
+            opacity: 1;
+            background: rgba(0, 0, 0, 0.1);
+        }
+        
+        /* 翻页提示 */
+        .nav-hint {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            color: white;
+            font-size: 3rem;
+            text-shadow: 0 0 10px rgba(0, 0, 0, 0.7);
+            background: rgba(0, 0, 0, 0.5);
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+        
+        .prev-hint {
+            left: 20px;
+        }
+        
+        .next-hint {
+            right: 20px;
+        }
+        
+        .page-nav-area:hover .nav-hint {
+            opacity: 1;
+        }
+        
+        /* 翻页动画 */
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        .pdf-page {
+            animation: fadeIn 0.5s ease-out;
+        }
+        
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .toolbar {
+                flex-wrap: wrap;
+                padding: 10px;
+            }
+            
+            .page-nav-area {
+                width: 20%;
+            }
+            
+            .nav-hint {
+                font-size: 2rem;
+                width: 45px;
+                height: 45px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 工具栏 -->
+    <div class="toolbar">
+        <button id="prev">上一页</button>
+        <div class="page-info">
+            页码: <span id="page_num">1</span> / <span id="page_count">?</span>
+        </div>
+        <button id="next">下一页</button>
+        <button id="zoom_in">放大</button>
+        <button id="zoom_out">缩小</button>
+    </div>
+    
+    <!-- 翻页区域 -->
+    <div class="page-nav-area prev-area">
+        <div class="nav-hint prev-hint">◀</div>
+    </div>
+    
+    <div id="viewerContainer">
+        <canvas id="pdfCanvas" class="pdf-page"></canvas>
+    </div>
+    
+    <div class="page-nav-area next-area">
+        <div class="nav-hint next-hint">▶</div>
+    </div>
+
+    <!-- PDF.js 库 -->
+    <script src="assets/build/pdf.js"></script>
+    <script>
+        // 初始化变量
+        const pdfjsLib = window['pdfjs-dist/build/pdf'];
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'assets/build/pdf.worker.js';
+        
+        let pdfDoc = null,
+            pageNum = 1,
+            pageRendering = false,
+            pageNumPending = null,
+            scale = 1.5;
+        
+        // 获取DOM元素
+        const pageNumSpan = document.getElementById('page_num');
+        const pageCountSpan = document.getElementById('page_count');
+        const canvas = document.getElementById('pdfCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 渲染PDF页面
+        function renderPage(num) {
+            pageRendering = true;
+            
+            // 添加动画效果
+            canvas.style.animation = 'fadeIn 0.5s ease-out';
+            
+            // 获取PDF页面
+            pdfDoc.getPage(num).then(function(page) {
+                const viewport = page.getViewport({ scale: scale });
+                
+                // 调整canvas尺寸
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                
+                // 渲染PDF页面到canvas
+                const renderContext = {
+                    canvasContext: ctx,
+                    viewport: viewport
+                };
+                
+                const renderTask = page.render(renderContext);
+                
+                renderTask.promise.then(function() {
+                    pageRendering = false;
+                    pageNum = num;
+                    pageNumSpan.textContent = num;
+                    
+                    if (pageNumPending !== null) {
+                        renderPage(pageNumPending);
+                        pageNumPending = null;
+                    }
+                });
+            });
+        }
+        
+        // 队列渲染
+        function queueRenderPage(num) {
+            if (pageRendering) {
+                pageNumPending = num;
+            } else {
+                renderPage(num);
+            }
+        }
+        
+        // 上一页
+        function onPrevPage() {
+            if (pageNum <= 1) return;
+            queueRenderPage(pageNum - 1);
+        }
+        
+        // 下一页
+        function onNextPage() {
+            if (pageNum >= pdfDoc.numPages) return;
+            queueRenderPage(pageNum + 1);
+        }
+        
+        // 放大
+        function zoomIn() {
+            if (scale >= 2.5) return;
+            scale += 0.2;
+            queueRenderPage(pageNum);
+        }
+        
+        // 缩小
+        function zoomOut() {
+            if (scale <= 0.5) return;
+            scale -= 0.2;
+            queueRenderPage(pageNum);
+        }
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            // 从URL获取PDF文件名
+            const urlParams = new URLSearchParams(window.location.search);
+            const pdfFile = urlParams.get('file') || 'portfolio.pdf';
+            
+            // 加载PDF文档
+            pdfjsLib.getDocument(pdfFile).promise.then(function(pdf) {
+                pdfDoc = pdf;
+                pageCountSpan.textContent = pdf.numPages;
+                
+                // 渲染第一页
+                renderPage(pageNum);
+            });
+            
+            // 绑定事件
+            document.getElementById('prev').addEventListener('click', onPrevPage);
+            document.getElementById('next').addEventListener('click', onNextPage);
+            document.getElementById('zoom_in').addEventListener('click', zoomIn);
+            document.getElementById('zoom_out').addEventListener('click', zoomOut);
+            
+            // 绑定翻页区域事件
+            document.querySelector('.prev-area').addEventListener('click', onPrevPage);
+            document.querySelector('.next-area').addEventListener('click', onNextPage);
+            
+            // 添加键盘翻页支持
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'ArrowLeft') onPrevPage();
+                if (e.key === 'ArrowRight') onNextPage();
+            });
+        });
+    </script>
+</body>
+</html>
