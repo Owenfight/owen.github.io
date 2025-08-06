@@ -531,6 +531,22 @@
                 bottom: 90px;
             }
         }
+        
+        /* 性能提示 */
+        .performance-hint {
+            position: fixed;
+            top: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            z-index: 20;
+            backdrop-filter: blur(5px);
+            display: none;
+            animation: fadeIn 0.5s ease;
+        }
     </style>
 </head>
 <body>
@@ -581,6 +597,11 @@
         </div>
     </div>
     
+    <!-- 性能提示 -->
+    <div class="performance-hint" id="performanceHint">
+        <i class="fas fa-bolt"></i> 优化模式已启用：快速加载与平滑翻页
+    </div>
+    
     <!-- 翻页区域 -->
     <div class="page-nav-area prev-area">
         <div class="nav-hint prev-hint">◀</div>
@@ -613,9 +634,8 @@
         <div class="progress-bar">
             <div class="progress" id="loading_progress"></div>
         </div>
-        <div class="file-info-card" style="margin-top: 20px; text-align: center;">
-            <p>提示：大型PDF文件可能需要一些时间加载</p>
-            <p>优化建议：当前使用分页渲染节省内存</p>
+        <div class="performance-hint" style="position: relative; top: 20px; display: block; background: rgba(255,255,255,0.1);">
+            <i class="fas fa-rocket"></i> 使用CDN加速下载中...
         </div>
     </div>
     
@@ -631,7 +651,7 @@
             <h3>PDF.js 配置</h3>
             <div class="config-option">
                 <label for="maxImageSize">最大图像尺寸 (KB)</label>
-                <input type="number" id="maxImageSize" value="2048">
+                <input type="number" id="maxImageSize" value="1024">
             </div>
             <div class="config-option">
                 <label for="disableFontFace">禁用字体加载</label>
@@ -643,26 +663,31 @@
             <h3>性能优化</h3>
             <div class="config-option">
                 <label for="chunkSize">文件分块大小 (MB)</label>
-                <input type="number" id="chunkSize" value="4">
+                <input type="number" id="chunkSize" value="1">
             </div>
             <div class="config-option">
                 <label for="useCDN">使用CDN加速</label>
-                <input type="checkbox" id="useCDN">
+                <input type="checkbox" id="useCDN" checked>
             </div>
             <div class="config-option">
                 <label for="preloadPages">预加载相邻页数</label>
-                <input type="number" id="preloadPages" min="0" max="3" value="1">
+                <input type="number" id="preloadPages" min="0" max="3" value="2">
             </div>
             <div class="config-option">
                 <label for="highQualityFirst">优先加载高质量</label>
-                <input type="checkbox" id="highQualityFirst" checked>
+                <input type="checkbox" id="highQualityFirst">
+            </div>
+            <div class="config-option">
+                <label for="progressiveRender">渐进式渲染</label>
+                <input type="checkbox" id="progressiveRender" checked>
             </div>
         </div>
         
         <div class="memory-info">
             <p>当前内存使用: <span id="current_memory">0</span> MB</p>
-            <p>最大内存限制: <span id="memory_limit">200</span> MB</p>
+            <p>最大内存限制: <span id="memory_limit">300</span> MB</p>
             <p>已释放页面: <span id="pages_released">0</span></p>
+            <p>渲染队列: <span id="render_queue">0</span></p>
         </div>
         
         <button id="applyConfig" style="width: 100%; padding: 12px; background: var(--success); color: white; border: none; border-radius: 6px; cursor: pointer;">
@@ -690,6 +715,8 @@
         const pageCache = new Map();
         let renderedPages = new Set();
         let pagesReleased = 0;
+        let renderQueue = [];
+        let isProcessingQueue = false;
         
         // 获取DOM元素
         const pageNumSpan = document.getElementById('page_num');
@@ -705,16 +732,18 @@
         const pageIndicator = document.getElementById('pageIndicator');
         const currentPageNumSpan = document.getElementById('currentPageNum');
         const totalPagesSpan = document.getElementById('totalPages');
+        const performanceHint = document.getElementById('performanceHint');
         
-        // PDF.js配置 - 提高默认图像尺寸
+        // PDF.js配置 - 优化后的配置
         const config = {
-            maxImageSize: 2048 * 1024, // 2MB
+            maxImageSize: 1024 * 1024,    // 1MB
             disableFontFace: true,
-            chunkSize: 4 * 1024 * 1024, // 4MB
-            useCDN: false,
-            preloadPages: 1, // 预加载相邻页数
-            highQualityFirst: true, // 优先加载高质量
-            memoryLimit: 200 // MB
+            chunkSize: 1 * 1024 * 1024,   // 1MB分块
+            useCDN: true,                 // 默认启用CDN
+            preloadPages: 2,              // 预加载相邻页数
+            highQualityFirst: false,      // 不优先加载高质量
+            memoryLimit: 300,             // 增大内存限制
+            progressiveRender: true       // 启用渐进式渲染
         };
         
         // 更新加载进度
@@ -755,7 +784,7 @@
             };
         }
         
-        // 渲染PDF页面 - 提高默认质量
+        // 渲染PDF页面 - 优化渲染质量
         async function renderPage(num) {
             if (pageRendering) return;
             
@@ -830,6 +859,11 @@
                     imageLayer: true
                 };
                 
+                // 渐进式渲染
+                if (config.progressiveRender) {
+                    renderContext.enableProgressiveRender = true;
+                }
+                
                 const renderTask = page.render(renderContext);
                 
                 await renderTask.promise;
@@ -854,9 +888,13 @@
             pageRendering = false;
             updateMemoryUsage();
             
-            if (pageNumPending !== null) {
-                renderPage(pageNumPending);
-                pageNumPending = null;
+            // 处理队列中的下一个任务
+            if (renderQueue.length > 0) {
+                const nextPage = renderQueue.shift();
+                document.getElementById('render_queue').textContent = renderQueue.length;
+                renderPage(nextPage);
+            } else {
+                isProcessingQueue = false;
             }
         }
         
@@ -913,12 +951,12 @@
                 const prevPage = currentPage - i;
                 const nextPage = currentPage + i;
                 
-                if (prevPage > 0 && !pageCache.has(prevPage)) {
-                    renderPage(prevPage);
+                if (prevPage > 0 && !pageCache.has(prevPage) && !renderQueue.includes(prevPage)) {
+                    queueRenderPage(prevPage);
                 }
                 
-                if (nextPage <= pdfDoc.numPages && !pageCache.has(nextPage)) {
-                    renderPage(nextPage);
+                if (nextPage <= pdfDoc.numPages && !pageCache.has(nextPage) && !renderQueue.includes(nextPage)) {
+                    queueRenderPage(nextPage);
                 }
             }
         }
@@ -988,8 +1026,13 @@
         // 队列渲染
         function queueRenderPage(num) {
             if (pageRendering) {
-                pageNumPending = num;
+                // 如果正在渲染，将任务加入队列
+                if (!renderQueue.includes(num)) {
+                    renderQueue.push(num);
+                    document.getElementById('render_queue').textContent = renderQueue.length;
+                }
             } else {
+                // 如果没有渲染任务，立即开始渲染
                 renderPage(num);
             }
         }
@@ -1066,22 +1109,35 @@
             config.useCDN = document.getElementById('useCDN').checked;
             config.preloadPages = parseInt(document.getElementById('preloadPages').value);
             config.highQualityFirst = document.getElementById('highQualityFirst').checked;
+            config.progressiveRender = document.getElementById('progressiveRender').checked;
             
             // 重新加载PDF应用新配置
             loadPDF();
             configPanel.style.display = 'none';
+            
+            // 显示性能提示
+            performanceHint.style.display = 'block';
+            setTimeout(() => {
+                performanceHint.style.display = 'none';
+            }, 3000);
         }
         
         // 加载PDF
         function loadPDF() {
             // 显示加载器
             loader.style.display = 'flex';
+            loader.style.opacity = '1';
+            loadingProgress.style.width = '0%';
+            loadingText.textContent = '初始化PDF查看器';
             
             // 重置缓存
             pageCache.clear();
             renderedPages.clear();
             viewerContainer.innerHTML = '';
             thumbnailBar.innerHTML = '';
+            renderQueue = [];
+            isProcessingQueue = false;
+            pagesReleased = 0;
             
             // 从URL获取PDF文件名
             const urlParams = new URLSearchParams(window.location.search);
@@ -1089,7 +1145,7 @@
             
             // 应用CDN配置
             if (config.useCDN) {
-                // 在实际项目中，这里应该替换为您的CDN路径
+                // 使用您的CDN路径
                 pdfFile = `https://cdn.jsdelivr.net/gh/Owenfight/Owenfight.github.io@main/${pdfFile}`;
             }
             
@@ -1110,7 +1166,7 @@
                 url: pdfFile,
                 rangeChunkSize: config.chunkSize,
                 disableStream: false,
-                disableRange: false,
+                disableRange: false, // 启用范围请求
                 verbosity: 0
             });
             
@@ -1132,9 +1188,10 @@
                     }
                 });
                 
-                // 创建缩略图
-                for (let i = 1; i <= Math.min(20, pdf.numPages); i++) {
-                    createThumbnail(i);
+                // 创建前10页缩略图
+                const thumbnailPromises = [];
+                for (let i = 1; i <= Math.min(10, pdf.numPages); i++) {
+                    thumbnailPromises.push(createThumbnail(i));
                 }
                 
                 // 渲染第一页
@@ -1147,6 +1204,12 @@
                         loader.style.display = 'none';
                     }, 500);
                 }, 500);
+                
+                // 显示性能提示
+                performanceHint.style.display = 'block';
+                setTimeout(() => {
+                    performanceHint.style.display = 'none';
+                }, 3000);
             }).catch(function(error) {
                 console.error('PDF加载失败:', error);
                 loadingText.textContent = `加载失败: ${error.message}`;
