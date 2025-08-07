@@ -589,6 +589,39 @@
             align-items: center;
             gap: 5px;
         }
+        
+        /* 低分辨率模式警告 */
+        .lowres-warning {
+            position: fixed;
+            top: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 152, 0, 0.8);
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            z-index: 20;
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        /* 加载状态指示器 */
+        .loading-indicator {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            z-index: 20;
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
     </style>
 </head>
 <body>
@@ -600,6 +633,16 @@
     <!-- 优化指示器 -->
     <div class="optimization-badge">
         <i class="fas fa-bolt"></i> 优化模式启用中
+    </div>
+    
+    <!-- 低分辨率模式警告 -->
+    <div class="lowres-warning" id="lowresWarning" style="display: none;">
+        <i class="fas fa-exclamation-triangle"></i> 移动端优化模式：低分辨率渲染中
+    </div>
+    
+    <!-- 加载状态指示器 -->
+    <div class="loading-indicator" id="loadingIndicator">
+        <i class="fas fa-spinner fa-spin"></i> <span>加载中...</span>
     </div>
     
     <!-- 顶部工具栏 -->
@@ -689,6 +732,9 @@
         <div class="performance-hint" style="position: relative; top: 20px; display: block; background: rgba(255,255,255,0.1);">
             <i class="fas fa-rocket"></i> 使用CDN加速下载中...
         </div>
+        <div class="lowres-warning" style="position: relative; top: 40px; display: block; background: rgba(255,152,0,0.7);">
+            <i class="fas fa-exclamation-triangle"></i> 检测到移动设备，自动启用低分辨率模式
+        </div>
     </div>
     
     <!-- 页面跳转面板 -->
@@ -703,7 +749,7 @@
             <h3>PDF.js 配置</h3>
             <div class="config-option">
                 <label for="maxImageSize">最大图像尺寸 (KB)</label>
-                <input type="number" id="maxImageSize" value="1024">
+                <input type="number" id="maxImageSize" value="512">
             </div>
             <div class="config-option">
                 <label for="disableFontFace">禁用字体加载</label>
@@ -715,7 +761,7 @@
             <h3>性能优化</h3>
             <div class="config-option">
                 <label for="chunkSize">文件分块大小 (MB)</label>
-                <input type="number" id="chunkSize" value="1">
+                <input type="number" id="chunkSize" value="0.5">
             </div>
             <div class="config-option">
                 <label for="useCDN">使用CDN加速</label>
@@ -723,7 +769,7 @@
             </div>
             <div class="config-option">
                 <label for="preloadPages">预加载相邻页数</label>
-                <input type="number" id="preloadPages" min="0" max="3" value="2">
+                <input type="number" id="preloadPages" min="0" max="3" value="1">
             </div>
             <div class="config-option">
                 <label for="highQualityFirst">优先加载高质量</label>
@@ -733,11 +779,19 @@
                 <label for="progressiveRender">渐进式渲染</label>
                 <input type="checkbox" id="progressiveRender" checked>
             </div>
+            <div class="config-option">
+                <label for="lazyLoad">启用懒加载</label>
+                <input type="checkbox" id="lazyLoad" checked>
+            </div>
+            <div class="config-option">
+                <label for="mobileOptimized">移动端优化模式</label>
+                <input type="checkbox" id="mobileOptimized" checked>
+            </div>
         </div>
         
         <div class="memory-info">
             <p>当前内存使用: <span id="current_memory">0</span> MB</p>
-            <p>最大内存限制: <span id="memory_limit">300</span> MB</p>
+            <p>最大内存限制: <span id="memory_limit">200</span> MB</p>
             <p>已释放页面: <span id="pages_released">0</span></p>
             <p>渲染队列: <span id="render_queue">0</span></p>
         </div>
@@ -754,11 +808,11 @@
     </div>
 
     <!-- PDF.js 库 -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
     <script>
         // 初始化变量
         const pdfjsLib = window['pdfjs-dist/build/pdf'];
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
         
         let pdfDoc = null,
             currentPage = 1,
@@ -792,19 +846,24 @@
         const totalPagesSpan = document.getElementById('totalPages');
         const performanceHint = document.getElementById('performanceHint');
         const connectionStatus = document.getElementById('connectionStatus');
+        const lowresWarning = document.getElementById('lowresWarning');
+        const loadingIndicator = document.getElementById('loadingIndicator');
         
-        // PDF.js配置 - 优化后的配置
+        // 优化后的配置 - 针对移动设备进行了优化
         const config = {
-            maxImageSize: 1024 * 1024,    // 1MB
+            maxImageSize: 512 * 1024,    // 0.5MB
             disableFontFace: true,
-            chunkSize: 1 * 1024 * 1024,   // 1MB分块
+            chunkSize: 0.5 * 1024 * 1024,   // 0.5MB分块
             useCDN: true,                 // 默认启用CDN
-            preloadPages: 2,              // 预加载相邻页数
+            preloadPages: 1,              // 预加载相邻页数（减少）
             highQualityFirst: false,      // 不优先加载高质量
-            memoryLimit: 300,             // 增大内存限制
+            memoryLimit: 200,             // 减少内存限制
             progressiveRender: true,      // 启用渐进式渲染
             cacheEnabled: true,           // 启用本地缓存
-            lazyLoadThreshold: 3          // 懒加载阈值
+            lazyLoad: true,               // 启用懒加载
+            mobileOptimized: true,        // 移动端优化
+            initialScale: window.innerWidth < 768 ? 1.0 : 1.5, // 移动端初始缩放更小
+            lazyLoadThreshold: 2          // 懒加载阈值
         };
         
         // 本地缓存对象
@@ -848,13 +907,16 @@
             };
         }
         
-        // 渲染PDF页面 - 优化渲染质量
+        // 渲染PDF页面 - 优化渲染质量和性能
         async function renderPage(num) {
-            // 检查页面是否正在加载或已加载（修复第1024行语法错误）
-            if (pageLoadingState.get(num)) return;
+            // 检查页面是否正在加载或已加载
+            if (pageLoadingState.get(num) );
             pageLoadingState.set(num, 'loading');
             
             if (pageRendering) return;
+            
+            // 显示加载指示器
+            loadingIndicator.style.display = 'flex';
             
             pageRendering = true;
             currentPage = num;
@@ -899,6 +961,9 @@
                 pageRendering = false;
                 pageLoadingState.set(num, 'loaded');
                 updateMemoryUsage();
+                
+                // 隐藏加载指示器
+                loadingIndicator.style.display = 'none';
                 return;
             }
             
@@ -909,8 +974,10 @@
             try {
                 const page = await pdfDoc.getPage(num);
                 
-                // 使用高质量渲染
-                const renderScale = scale;
+                // 根据设备类型调整缩放比例
+                const renderScale = config.mobileOptimized && window.innerWidth < 768 ? 
+                    Math.min(scale, 1.2) : scale;
+                
                 const viewport = page.getViewport({ scale: renderScale });
                 
                 // 更新分辨率显示
@@ -944,8 +1011,10 @@
                 
                 container.classList.remove('loading');
                 
-                // 预加载相邻页面
-                preloadAdjacentPages(num);
+                // 预加载相邻页面（仅在需要时）
+                if (config.preloadPages > 0) {
+                    preloadAdjacentPages(num);
+                }
             } catch (error) {
                 console.error(`渲染页面 ${num} 时出错:`, error);
                 container.innerHTML = `<div style="padding: 40px; text-align: center; color: #ff6b6b;">
@@ -958,6 +1027,9 @@
             
             pageRendering = false;
             updateMemoryUsage();
+            
+            // 隐藏加载指示器
+            loadingIndicator.style.display = 'none';
             
             // 处理队列中的下一个任务
             if (renderQueue.length > 0) {
@@ -972,7 +1044,7 @@
         // 创建缩略图
         async function createThumbnail(pageNum) {
             const page = await pdfDoc.getPage(pageNum);
-            const viewport = page.getViewport({ scale: 0.2 }); // 提高缩略图质量
+            const viewport = page.getViewport({ scale: 0.15 }); // 降低缩略图质量以减少内存
             
             const canvas = document.createElement('canvas');
             canvas.width = viewport.width;
@@ -990,7 +1062,7 @@
             const thumbnail = document.createElement('div');
             thumbnail.className = 'thumbnail-item';
             thumbnail.dataset.page = pageNum;
-            thumbnail.style.backgroundImage = `url(${canvas.toDataURL('image/jpeg', 0.8)})`;
+            thumbnail.style.backgroundImage = `url(${canvas.toDataURL('image/jpeg', 0.7)})`;
             thumbnail.style.backgroundSize = 'cover';
             thumbnail.style.backgroundPosition = 'center';
             
@@ -1014,7 +1086,7 @@
             return thumbnail;
         }
         
-        // 预加载相邻页面 - 智能预加载策略（修复第854行语法错误）
+        // 预加载相邻页面 - 智能预加载策略
         function preloadAdjacentPages(currentPage) {
             const preloadCount = config.preloadPages;
             
@@ -1093,7 +1165,7 @@
             document.getElementById('memory_limit').textContent = config.memoryLimit;
             
             // 检查内存限制
-            if (memoryMB > config.memoryLimit) {
+            if (memoryMB > config.memoryLimit * 0.8) {
                 releaseUnusedPages();
             }
         }
@@ -1199,6 +1271,8 @@
             config.preloadPages = parseInt(document.getElementById('preloadPages').value);
             config.highQualityFirst = document.getElementById('highQualityFirst').checked;
             config.progressiveRender = document.getElementById('progressiveRender').checked;
+            config.lazyLoad = document.getElementById('lazyLoad').checked;
+            config.mobileOptimized = document.getElementById('mobileOptimized').checked;
             config.cacheEnabled = true;
             
             // 重新加载PDF应用新配置
@@ -1236,7 +1310,7 @@
             
             // 应用CDN配置
             if (config.useCDN) {
-                // 使用您的CDN路径
+                // 使用更快的CDN路径
                 pdfFile = `https://cdn.jsdelivr.net/gh/Owenfight/Owenfight.github.io@main/${pdfFile}`;
             }
             
@@ -1302,9 +1376,9 @@
                     }
                 });
                 
-                // 创建前10页缩略图
+                // 创建前5页缩略图
                 const thumbnailPromises = [];
-                for (let i = 1; i <= Math.min(10, pdf.numPages); i++) {
+                for (let i = 1; i <= Math.min(5, pdf.numPages); i++) {
                     thumbnailPromises.push(createThumbnail(i));
                 }
                 
@@ -1324,10 +1398,28 @@
                 setTimeout(() => {
                     performanceHint.style.display = 'none';
                 }, 3000);
+                
+                // 如果是移动设备，显示低分辨率警告
+                if (window.innerWidth < 768 && config.mobileOptimized) {
+                    lowresWarning.style.display = 'flex';
+                }
             }).catch(function(error) {
                 console.error('PDF加载失败:', error);
                 loadingText.textContent = `加载失败: ${error.message}`;
                 loadingProgress.style.background = 'red';
+                
+                // 显示重试按钮
+                const retryButton = document.createElement('button');
+                retryButton.textContent = '重试';
+                retryButton.style.marginTop = '20px';
+                retryButton.style.padding = '10px 20px';
+                retryButton.style.background = 'var(--accent)';
+                retryButton.style.color = 'white';
+                retryButton.style.border = 'none';
+                retryButton.style.borderRadius = '6px';
+                retryButton.style.cursor = 'pointer';
+                retryButton.addEventListener('click', loadPDF);
+                loader.appendChild(retryButton);
             });
         }
         
@@ -1351,9 +1443,9 @@
                     }
                 });
                 
-                // 创建前10页缩略图
+                // 创建前5页缩略图
                 const thumbnailPromises = [];
-                for (let i = 1; i <= Math.min(10, pdf.numPages); i++) {
+                for (let i = 1; i <= Math.min(5, pdf.numPages); i++) {
                     thumbnailPromises.push(createThumbnail(i));
                 }
                 
@@ -1406,6 +1498,10 @@
                     // 网络较差时自动调整配置
                     config.preloadPages = 1;
                     config.progressiveRender = true;
+                    config.mobileOptimized = true;
+                    
+                    // 显示低分辨率警告
+                    lowresWarning.style.display = 'flex';
                 }
                 
                 connectionStatus.innerHTML = `<i class="fas fa-signal"></i> <span>${statusText}</span>`;
@@ -1418,6 +1514,9 @@
             // 检测网络速度
             detectNetworkSpeed();
             setInterval(detectNetworkSpeed, 30000);
+            
+            // 隐藏加载指示器
+            loadingIndicator.style.display = 'none';
             
             // 加载PDF
             loadPDF();
