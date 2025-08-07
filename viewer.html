@@ -743,6 +743,7 @@
         let pdfDoc = null,
             currentPage = 1,
             pageRendering = false,
+            pageNumPending = null,
             scale = 1.5;
         
         // 页面缓存
@@ -751,9 +752,6 @@
         let pagesReleased = 0;
         let renderQueue = [];
         let isProcessingQueue = false;
-        let isInitialRender = true;
-        let isJumping = false;
-        let lastPageChange = Date.now();
         
         // 获取DOM元素
         const pageNumSpan = document.getElementById('page_num');
@@ -786,7 +784,7 @@
         };
         
         // 本地缓存对象
-        let pdfCache = localStorage.getItem('pdfCache') ? JSON.parse(localStorage.getItem('pdfCache')) : {};
+        const pdfCache = localStorage.getItem('pdfCache') ? JSON.parse(localStorage.getItem('pdfCache')) : {};
         
         // 更新加载进度
         function updateProgress(loaded, total) {
@@ -828,7 +826,7 @@
         
         // 渲染PDF页面 - 优化渲染质量
         async function renderPage(num) {
-            if (pageRendering && currentPage === num) return;
+            if (pageRendering) return;
             
             pageRendering = true;
             currentPage = num;
@@ -862,12 +860,8 @@
             if (activeContainer) {
                 activeContainer.classList.add('active');
                 
-                // 只在需要时滚动
-                if (isInitialRender || isJumping) {
-                    activeContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-                    isInitialRender = false;
-                    isJumping = false;
-                }
+                // 滚动到该页面
+                activeContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
             }
             
             // 如果页面已在缓存中
@@ -935,7 +929,13 @@
             updateMemoryUsage();
             
             // 处理队列中的下一个任务
-            processRenderQueue();
+            if (renderQueue.length > 0) {
+                const nextPage = renderQueue.shift();
+                document.getElementById('render_queue').textContent = renderQueue.length;
+                renderPage(nextPage);
+            } else {
+                isProcessingQueue = false;
+            }
         }
         
         // 创建缩略图
@@ -1065,37 +1065,25 @@
         
         // 队列渲染 - 修复页面跳转问题
         function queueRenderPage(num) {
-            // 限制快速翻页
-            const now = Date.now();
-            if (now - lastPageChange < 300) return;
-            lastPageChange = now;
-            
-            // 忽略重复请求
-            if (currentPage === num && pageRendering) return;
-            
-            // 添加到队列（去重）
-            if (!renderQueue.includes(num)) {
-                renderQueue.push(num);
-                document.getElementById('render_queue').textContent = renderQueue.length;
-            }
-            
-            // 启动队列处理
-            if (!pageRendering && !isProcessingQueue) {
-                isProcessingQueue = true;
-                processRenderQueue();
-            }
-        }
-        
-        // 处理渲染队列
-        function processRenderQueue() {
-            if (renderQueue.length === 0) {
-                isProcessingQueue = false;
-                return;
-            }
-            
-            const nextPage = renderQueue.shift();
+            // 清空队列，只保留当前请求
+            renderQueue = [num];
             document.getElementById('render_queue').textContent = renderQueue.length;
-            renderPage(nextPage);
+            
+            // 如果当前没有在渲染，则开始渲染
+            if (!pageRendering) {
+                renderPage(num);
+            } else {
+                // 如果正在渲染，取消当前任务
+                if (pageCache.has(currentPage)) {
+                    const { renderTask } = pageCache.get(currentPage);
+                    if (renderTask && !renderTask._internalRenderTask.complete) {
+                        renderTask.cancel();
+                        console.log(`取消页面 ${currentPage} 的渲染`);
+                        pageRendering = false;
+                        renderPage(num);
+                    }
+                }
+            }
         }
         
         // 上一页
@@ -1142,7 +1130,6 @@
             const pageNum = parseInt(pageInput.value);
             
             if (pageNum > 0 && pageNum <= pdfDoc.numPages) {
-                isJumping = true; // 标记为跳转操作
                 queueRenderPage(pageNum);
             } else {
                 alert(`无效的页码，请输入1-${pdfDoc.numPages}之间的数字`);
@@ -1203,7 +1190,6 @@
             renderQueue = [];
             isProcessingQueue = false;
             pagesReleased = 0;
-            isInitialRender = true;
             
             // 从URL获取PDF文件名
             const urlParams = new URLSearchParams(window.location.search);
@@ -1464,7 +1450,7 @@
             });
             
             function handleSwipe() {
-                const minSwipeDistance = 100; // 增加灵敏度阈值
+                const minSwipeDistance = 50;
                 
                 if (touchStartX - touchEndX > minSwipeDistance) {
                     onNextPage();
