@@ -548,48 +548,38 @@
             animation: fadeIn 0.5s ease;
         }
         
-        /* 加载速度指示器 */
-        .speed-indicator {
-            position: absolute;
-            bottom: 10px;
-            left: 10px;
-            background: rgba(0, 0, 0, 0.6);
-            color: #ffcc00;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            z-index: 21;
-        }
-        
-        /* 网络状态指示器 */
-        .network-status {
+        /* 连接状态指示器 */
+        .connection-status {
             position: fixed;
             top: 10px;
             right: 10px;
-            background: rgba(0, 0, 0, 0.7);
-            color: #4caf50;
-            padding: 6px 12px;
+            padding: 5px 10px;
             border-radius: 20px;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             z-index: 100;
+            background: rgba(0, 0, 0, 0.7);
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
         }
         
-        .network-status.slow {
-            color: #ff9800;
+        .connection-good {
+            background: rgba(76, 175, 80, 0.7);
         }
         
-        .network-status.bad {
-            color: #ff6b6b;
+        .connection-average {
+            background: rgba(255, 152, 0, 0.7);
+        }
+        
+        .connection-poor {
+            background: rgba(244, 67, 54, 0.7);
         }
     </style>
 </head>
 <body>
-    <!-- 网络状态指示器 -->
-    <div class="network-status" id="networkStatus">
-        <i class="fas fa-signal"></i> 网络良好
+    <!-- 连接状态指示器 -->
+    <div class="connection-status connection-good" id="connectionStatus">
+        <i class="fas fa-signal"></i> <span>网络: 良好</span>
     </div>
     
     <!-- 顶部工具栏 -->
@@ -636,7 +626,6 @@
             <div>文件大小: <span id="file_size">0 MB</span></div>
             <div>分辨率: <span id="resolution">-</span></div>
             <div>内存: <span id="memory_usage">0 MB</span></div>
-            <div>加载速度: <span id="download_speed">0 KB/s</span></div>
         </div>
     </div>
     
@@ -677,9 +666,6 @@
         <div class="progress-bar">
             <div class="progress" id="loading_progress"></div>
         </div>
-        <div class="speed-indicator">
-            下载速度: <span id="loading_speed">0 KB/s</span>
-        </div>
         <div class="performance-hint" style="position: relative; top: 20px; display: block; background: rgba(255,255,255,0.1);">
             <i class="fas fa-rocket"></i> 使用CDN加速下载中...
         </div>
@@ -709,7 +695,7 @@
             <h3>性能优化</h3>
             <div class="config-option">
                 <label for="chunkSize">文件分块大小 (MB)</label>
-                <input type="number" id="chunkSize" value="0.25" step="0.1" min="0.1" max="2">
+                <input type="number" id="chunkSize" value="1">
             </div>
             <div class="config-option">
                 <label for="useCDN">使用CDN加速</label>
@@ -717,7 +703,7 @@
             </div>
             <div class="config-option">
                 <label for="preloadPages">预加载相邻页数</label>
-                <input type="number" id="preloadPages" min="0" max="3" value="1">
+                <input type="number" id="preloadPages" min="0" max="3" value="2">
             </div>
             <div class="config-option">
                 <label for="highQualityFirst">优先加载高质量</label>
@@ -726,18 +712,6 @@
             <div class="config-option">
                 <label for="progressiveRender">渐进式渲染</label>
                 <input type="checkbox" id="progressiveRender" checked>
-            </div>
-            <div class="config-option">
-                <label for="lazyLoad">延迟加载非活动页</label>
-                <input type="checkbox" id="lazyLoad" checked>
-            </div>
-            <div class="config-option">
-                <label for="cdnProvider">CDN提供商</label>
-                <select id="cdnProvider">
-                    <option value="jsdelivr">jsDelivr</option>
-                    <option value="cloudflare">Cloudflare</option>
-                    <option value="github">GitHub原生</option>
-                </select>
             </div>
         </div>
         
@@ -753,6 +727,9 @@
         </button>
         <button id="releaseMemory" style="width: 100%; padding: 12px; background: var(--warning); color: white; border: none; border-radius: 6px; cursor: pointer; margin-top: 10px;">
             释放未使用内存
+        </button>
+        <button id="clearCache" style="width: 100%; padding: 12px; background: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; margin-top: 10px;">
+            清除PDF缓存
         </button>
     </div>
 
@@ -783,64 +760,37 @@
         const loader = document.getElementById('loader');
         const loadingText = document.getElementById('loading_text');
         const loadingProgress = document.getElementById('loading_progress');
-        const loadingSpeed = document.getElementById('loading_speed');
         const fileSizeSpan = document.getElementById('file_size');
         const resolutionSpan = document.getElementById('resolution');
         const memoryUsageSpan = document.getElementById('memory_usage');
-        const downloadSpeedSpan = document.getElementById('download_speed');
         const thumbnailBar = document.getElementById('thumbnailBar');
         const pageIndicator = document.getElementById('pageIndicator');
         const currentPageNumSpan = document.getElementById('currentPageNum');
         const totalPagesSpan = document.getElementById('totalPages');
         const performanceHint = document.getElementById('performanceHint');
-        const networkStatus = document.getElementById('networkStatus');
+        const connectionStatus = document.getElementById('connectionStatus');
         
         // PDF.js配置 - 优化后的配置
         const config = {
             maxImageSize: 1024 * 1024,    // 1MB
             disableFontFace: true,
-            chunkSize: 0.25 * 1024 * 1024,   // 256KB分块
+            chunkSize: 1 * 1024 * 1024,   // 1MB分块
             useCDN: true,                 // 默认启用CDN
-            preloadPages: 1,              // 预加载相邻页数
+            preloadPages: 2,              // 预加载相邻页数
             highQualityFirst: false,      // 不优先加载高质量
             memoryLimit: 300,             // 增大内存限制
             progressiveRender: true,      // 启用渐进式渲染
-            lazyLoad: true,               // 延迟加载非活动页
-            cdnProvider: 'jsdelivr'       // 默认CDN提供商
+            cacheEnabled: true            // 启用本地缓存
         };
         
-        // 更新加载进度和速度
-        function updateProgress(progressData, startTime, lastLoaded, lastTime) {
-            const loaded = progressData.loaded;
-            const total = progressData.total;
+        // 本地缓存对象
+        let pdfCache = localStorage.getItem('pdfCache') ? JSON.parse(localStorage.getItem('pdfCache')) : {};
+        
+        // 更新加载进度
+        function updateProgress(loaded, total) {
             const percent = Math.round((loaded / total) * 100);
             loadingProgress.style.width = `${percent}%`;
-            
-            // 计算下载速度
-            const currentTime = new Date().getTime();
-            const elapsedTime = (currentTime - lastTime) / 1000; // 秒
-            const loadedSinceLast = loaded - lastLoaded;
-            const speed = elapsedTime > 0 ? loadedSinceLast / elapsedTime : 0; // 字节/秒
-            
-            const speedKBps = Math.round(speed / 1024);
-            loadingSpeed.textContent = `${speedKBps} KB/s`;
-            downloadSpeedSpan.textContent = `${speedKBps} KB/s`;
-            
             loadingText.textContent = `正在加载: ${formatBytes(loaded)} / ${formatBytes(total)} (${percent}%)`;
-            
-            // 更新网络状态显示
-            if (speedKBps < 50) {
-                networkStatus.className = "network-status bad";
-                networkStatus.innerHTML = '<i class="fas fa-signal"></i> 网络缓慢';
-            } else if (speedKBps < 200) {
-                networkStatus.className = "network-status slow";
-                networkStatus.innerHTML = '<i class="fas fa-signal"></i> 网络正常';
-            } else {
-                networkStatus.className = "network-status";
-                networkStatus.innerHTML = '<i class="fas fa-signal"></i> 网络良好';
-            }
-            
-            return [loaded, currentTime];
         }
         
         // 格式化字节大小
@@ -1035,8 +985,6 @@
         
         // 预加载相邻页面
         function preloadAdjacentPages(currentPage) {
-            if (!config.lazyLoad) return;
-            
             const preloadCount = config.preloadPages;
             
             for (let i = 1; i <= preloadCount; i++) {
@@ -1055,8 +1003,6 @@
         
         // 释放未使用页面的内存
         function releaseUnusedPages() {
-            if (!config.lazyLoad) return;
-            
             const currentPageNum = parseInt(pageNumSpan.textContent);
             const preloadCount = config.preloadPages;
             const pagesToKeep = new Set();
@@ -1119,30 +1065,17 @@
         
         // 队列渲染 - 修复页面跳转问题
         function queueRenderPage(num) {
-            // 如果请求的页面就是当前正在渲染的页面，则忽略
-            if (num === currentPage && pageRendering) {
-                return;
-            }
+            // 清空队列
+            renderQueue = [];
+            document.getElementById('render_queue').textContent = renderQueue.length;
             
-            // 如果页面已经在缓存中，直接显示
-            if (pageCache.has(num)) {
-                renderPage(num);
-                return;
-            }
+            // 更新页码显示
+            currentPage = num;
+            pageNumSpan.textContent = num;
+            currentPageNumSpan.textContent = num;
             
-            // 添加到渲染队列
-            if (!renderQueue.includes(num)) {
-                renderQueue.push(num);
-                document.getElementById('render_queue').textContent = renderQueue.length;
-            }
-            
-            // 如果当前没有在渲染，则开始渲染
-            if (!pageRendering && !isProcessingQueue) {
-                isProcessingQueue = true;
-                const nextPage = renderQueue.shift();
-                document.getElementById('render_queue').textContent = renderQueue.length;
-                renderPage(nextPage);
-            }
+            // 直接渲染目标页面
+            renderPage(num);
         }
         
         // 上一页
@@ -1190,6 +1123,8 @@
             
             if (pageNum > 0 && pageNum <= pdfDoc.numPages) {
                 queueRenderPage(pageNum);
+            } else {
+                alert(`无效的页码，请输入1-${pdfDoc.numPages}之间的数字`);
             }
             
             pageJumpPanel.style.display = 'none';
@@ -1213,13 +1148,12 @@
         function applyConfig() {
             config.maxImageSize = parseInt(document.getElementById('maxImageSize').value) * 1024;
             config.disableFontFace = document.getElementById('disableFontFace').checked;
-            config.chunkSize = parseFloat(document.getElementById('chunkSize').value) * 1024 * 1024;
+            config.chunkSize = parseInt(document.getElementById('chunkSize').value) * 1024 * 1024;
             config.useCDN = document.getElementById('useCDN').checked;
             config.preloadPages = parseInt(document.getElementById('preloadPages').value);
             config.highQualityFirst = document.getElementById('highQualityFirst').checked;
             config.progressiveRender = document.getElementById('progressiveRender').checked;
-            config.lazyLoad = document.getElementById('lazyLoad').checked;
-            config.cdnProvider = document.getElementById('cdnProvider').value;
+            config.cacheEnabled = true;
             
             // 重新加载PDF应用新配置
             loadPDF();
@@ -1232,31 +1166,13 @@
             }, 3000);
         }
         
-        // 获取CDN URL
-        function getCdnUrl(pdfFile) {
-            const user = 'Owenfight';
-            const repo = 'Owenfight.github.io';
-            const branch = 'main';
-            
-            switch(config.cdnProvider) {
-                case 'jsdelivr':
-                    return `https://cdn.jsdelivr.net/gh/${user}/${repo}@${branch}/${pdfFile}`;
-                case 'cloudflare':
-                    return `https://cdnjs.cloudflare.com/gh/${user}/${repo}@${branch}/${pdfFile}`;
-                case 'github':
-                default:
-                    return `https://raw.githubusercontent.com/${user}/${repo}/${branch}/${pdfFile}`;
-            }
-        }
-        
-        // 加载PDF
+        // 加载PDF - 优化下载速度和缓存
         function loadPDF() {
             // 显示加载器
             loader.style.display = 'flex';
             loader.style.opacity = '1';
             loadingProgress.style.width = '0%';
             loadingText.textContent = '初始化PDF查看器';
-            loadingSpeed.textContent = '0 KB/s';
             
             // 重置缓存
             pageCache.clear();
@@ -1273,7 +1189,24 @@
             
             // 应用CDN配置
             if (config.useCDN) {
-                pdfFile = getCdnUrl(pdfFile);
+                // 使用您的CDN路径
+                pdfFile = `https://cdn.jsdelivr.net/gh/Owenfight/Owenfight.github.io@main/${pdfFile}`;
+            }
+            
+            // 检查是否有缓存
+            const cachedPdf = pdfCache[pdfFile];
+            if (cachedPdf && config.cacheEnabled && cachedPdf.expiry > Date.now()) {
+                console.log('从缓存加载PDF');
+                loadingText.textContent = '从缓存加载PDF...';
+                
+                // 延迟显示以展示进度
+                setTimeout(() => {
+                    const data = new Uint8Array(cachedPdf.data);
+                    processPDFData(data.buffer, pdfFile);
+                    loadingProgress.style.width = '100%';
+                }, 500);
+                
+                return;
             }
             
             // 设置PDF.js配置
@@ -1281,12 +1214,6 @@
                 maxImageSize: config.maxImageSize,
                 disableFontFace: config.disableFontFace
             };
-            
-            // 检测移动设备
-            const isMobile = window.innerWidth <= 768;
-            if (isMobile) {
-                scale = 1.0;
-            }
             
             // 创建自定义PDF数据加载器
             const customLoadingTask = pdfjsLib.getDocument({
@@ -1297,14 +1224,9 @@
                 verbosity: 0
             });
             
-            // 记录加载状态
-            let lastLoaded = 0;
-            let lastTime = new Date().getTime();
-            const startTime = lastTime;
-            
             // 监听加载进度
             customLoadingTask.onProgress = function(progressData) {
-                [lastLoaded, lastTime] = updateProgress(progressData, startTime, lastLoaded, lastTime);
+                updateProgress(progressData.loaded, progressData.total);
             };
             
             // 加载PDF文档
@@ -1317,13 +1239,25 @@
                 pdf.getMetadata().then(function(metadata) {
                     if (metadata.contentLength) {
                         fileSizeSpan.textContent = formatBytes(metadata.contentLength);
+                        
+                        // 缓存PDF数据 (设置1天有效期)
+                        if (config.cacheEnabled) {
+                            fetch(pdfFile)
+                                .then(response => response.arrayBuffer())
+                                .then(buffer => {
+                                    pdfCache[pdfFile] = {
+                                        data: Array.from(new Uint8Array(buffer)),
+                                        expiry: Date.now() + 24 * 60 * 60 * 1000
+                                    };
+                                    localStorage.setItem('pdfCache', JSON.stringify(pdfCache));
+                                });
+                        }
                     }
                 });
                 
-                // 创建前5页缩略图（优化加载速度）
+                // 创建前10页缩略图
                 const thumbnailPromises = [];
-                const pagesToThumbnail = Math.min(5, pdf.numPages);
-                for (let i = 1; i <= pagesToThumbnail; i++) {
+                for (let i = 1; i <= Math.min(10, pdf.numPages); i++) {
                     thumbnailPromises.push(createThumbnail(i));
                 }
                 
@@ -1350,8 +1284,94 @@
             });
         }
         
+        // 处理PDF数据
+        function processPDFData(data, url) {
+            const loadingTask = pdfjsLib.getDocument({
+                data: data,
+                rangeChunkSize: config.chunkSize,
+                disableFontFace: config.disableFontFace
+            });
+            
+            loadingTask.promise.then(function(pdf) {
+                pdfDoc = pdf;
+                pageCountSpan.textContent = pdf.numPages;
+                totalPagesSpan.textContent = pdf.numPages;
+                
+                // 更新文件信息
+                pdf.getMetadata().then(function(metadata) {
+                    if (metadata.contentLength) {
+                        fileSizeSpan.textContent = formatBytes(metadata.contentLength);
+                    }
+                });
+                
+                // 创建前10页缩略图
+                const thumbnailPromises = [];
+                for (let i = 1; i <= Math.min(10, pdf.numPages); i++) {
+                    thumbnailPromises.push(createThumbnail(i));
+                }
+                
+                // 渲染第一页
+                renderPage(currentPage);
+                
+                // 隐藏加载器
+                setTimeout(() => {
+                    loader.style.opacity = '0';
+                    setTimeout(() => {
+                        loader.style.display = 'none';
+                    }, 500);
+                }, 500);
+            }).catch(function(error) {
+                console.error('处理PDF数据失败:', error);
+                loadingText.textContent = `处理失败: ${error.message}`;
+                loadingProgress.style.background = 'red';
+            });
+        }
+        
+        // 清除PDF缓存
+        function clearPDFCache() {
+            localStorage.removeItem('pdfCache');
+            pdfCache = {};
+            alert('PDF缓存已清除');
+            loadPDF();
+        }
+        
+        // 检测网络连接速度
+        function detectNetworkSpeed() {
+            const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+            
+            if (connection) {
+                let statusText = '网络: ';
+                let statusClass = '';
+                
+                if (connection.downlink > 5) {
+                    statusText += '极佳';
+                    statusClass = 'connection-good';
+                } else if (connection.downlink > 2) {
+                    statusText += '良好';
+                    statusClass = 'connection-good';
+                } else if (connection.downlink > 0.5) {
+                    statusText += '一般';
+                    statusClass = 'connection-average';
+                } else {
+                    statusText += '较差';
+                    statusClass = 'connection-poor';
+                    
+                    // 网络较差时自动调整配置
+                    config.preloadPages = 1;
+                    config.progressiveRender = true;
+                }
+                
+                connectionStatus.innerHTML = `<i class="fas fa-signal"></i> <span>${statusText}</span>`;
+                connectionStatus.className = `connection-status ${statusClass}`;
+            }
+        }
+        
         // 初始化
         document.addEventListener('DOMContentLoaded', function() {
+            // 检测网络速度
+            detectNetworkSpeed();
+            setInterval(detectNetworkSpeed, 30000);
+            
             // 加载PDF
             loadPDF();
             
@@ -1370,6 +1390,7 @@
             });
             document.getElementById('applyConfig').addEventListener('click', applyConfig);
             document.getElementById('releaseMemory').addEventListener('click', releaseUnusedPages);
+            document.getElementById('clearCache').addEventListener('click', clearPDFCache);
             
             // 绑定翻页区域事件
             document.querySelector('.prev-area').addEventListener('click', onPrevPage);
@@ -1378,7 +1399,7 @@
             // 添加键盘翻页支持
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'ArrowLeft') onPrevPage();
-                if (e.key === 'ArrowRight') onNextPage();
+                else if (e.key === 'ArrowRight') onNextPage();
                 if (e.key === 'Escape' && document.fullscreenElement) {
                     document.exitFullscreen();
                     document.body.classList.remove('fullscreen');
@@ -1400,18 +1421,12 @@
             viewerContainer.addEventListener('scroll', function() {
                 clearTimeout(scrollTimeout);
                 scrollTimeout = setTimeout(function() {
-                    if (config.lazyLoad) {
-                        releaseUnusedPages();
-                    }
+                    releaseUnusedPages();
                 }, 1000);
             });
             
             // 定期释放内存
-            setInterval(function() {
-                if (config.lazyLoad) {
-                    releaseUnusedPages();
-                }
-            }, 30000);
+            setInterval(releaseUnusedPages, 30000);
             
             // 添加左右滑动翻页支持（移动设备）
             let touchStartX = 0;
