@@ -574,6 +574,19 @@
         .connection-poor {
             background: rgba(244, 67, 54, 0.7);
         }
+        
+        /* 调试信息 */
+        .debug-info {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            z-index: 100;
+            color: var(--accent);
+        }
     </style>
 </head>
 <body>
@@ -733,6 +746,11 @@
         </button>
     </div>
 
+    <!-- 调试信息 -->
+    <div class="debug-info" id="debugInfo">
+        当前页码: 1 | 状态: 初始化
+    </div>
+
     <!-- PDF.js 库 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <script>
@@ -751,9 +769,6 @@
         let pagesReleased = 0;
         let renderQueue = [];
         let isProcessingQueue = false;
-        let isInitialRender = true;
-        let isJumping = false;
-        let lastPageChange = Date.now();
         
         // 获取DOM元素
         const pageNumSpan = document.getElementById('page_num');
@@ -771,6 +786,7 @@
         const totalPagesSpan = document.getElementById('totalPages');
         const performanceHint = document.getElementById('performanceHint');
         const connectionStatus = document.getElementById('connectionStatus');
+        const debugInfo = document.getElementById('debugInfo');
         
         // PDF.js配置 - 优化后的配置
         const config = {
@@ -788,11 +804,17 @@
         // 本地缓存对象
         let pdfCache = localStorage.getItem('pdfCache') ? JSON.parse(localStorage.getItem('pdfCache')) : {};
         
+        // 更新调试信息
+        function updateDebugInfo(message) {
+            debugInfo.textContent = message;
+        }
+        
         // 更新加载进度
         function updateProgress(loaded, total) {
             const percent = Math.round((loaded / total) * 100);
             loadingProgress.style.width = `${percent}%`;
             loadingText.textContent = `正在加载: ${formatBytes(loaded)} / ${formatBytes(total)} (${percent}%)`;
+            updateDebugInfo(`加载进度: ${percent}% | 当前页码: ${currentPage}`);
         }
         
         // 格式化字节大小
@@ -828,12 +850,16 @@
         
         // 渲染PDF页面 - 优化渲染质量
         async function renderPage(num) {
-            if (pageRendering && currentPage === num) return;
+            if (pageRendering) {
+                updateDebugInfo(`渲染中，跳过页面: ${num} | 当前页码: ${currentPage}`);
+                return;
+            }
             
             pageRendering = true;
             currentPage = num;
             pageNumSpan.textContent = num;
             currentPageNumSpan.textContent = num;
+            updateDebugInfo(`开始渲染页面: ${num} | 状态: 渲染中`);
             
             // 更新活动页面
             document.querySelectorAll('.pdf-page-container').forEach(el => {
@@ -862,12 +888,8 @@
             if (activeContainer) {
                 activeContainer.classList.add('active');
                 
-                // 只在需要时滚动
-                if (isInitialRender || isJumping) {
-                    activeContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-                    isInitialRender = false;
-                    isJumping = false;
-                }
+                // 滚动到该页面
+                activeContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
             }
             
             // 如果页面已在缓存中
@@ -876,6 +898,7 @@
                 container.classList.remove('loading');
                 pageRendering = false;
                 updateMemoryUsage();
+                updateDebugInfo(`页面 ${num} 已缓存 | 状态: 完成`);
                 return;
             }
             
@@ -919,6 +942,7 @@
                 renderedPages.add(num);
                 
                 container.classList.remove('loading');
+                updateDebugInfo(`页面 ${num} 渲染完成 | 状态: 成功`);
                 
                 // 预加载相邻页面
                 preloadAdjacentPages(num);
@@ -929,58 +953,71 @@
                     <p>加载页面失败</p>
                     <p>${error.message}</p>
                 </div>`;
+                updateDebugInfo(`页面 ${num} 渲染失败: ${error.message}`);
             }
             
             pageRendering = false;
             updateMemoryUsage();
             
             // 处理队列中的下一个任务
-            processRenderQueue();
+            if (renderQueue.length > 0) {
+                const nextPage = renderQueue.shift();
+                document.getElementById('render_queue').textContent = renderQueue.length;
+                updateDebugInfo(`处理队列，下一个页面: ${nextPage}`);
+                renderPage(nextPage);
+            } else {
+                isProcessingQueue = false;
+            }
         }
         
         // 创建缩略图
         async function createThumbnail(pageNum) {
-            const page = await pdfDoc.getPage(pageNum);
-            const viewport = page.getViewport({ scale: 0.2 }); // 提高缩略图质量
-            
-            const canvas = document.createElement('canvas');
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-            
-            const renderContext = {
-                canvasContext: canvas.getContext('2d'),
-                viewport: viewport
-            };
-            
-            const renderTask = page.render(renderContext);
-            await renderTask.promise;
-            
-            // 创建缩略图元素
-            const thumbnail = document.createElement('div');
-            thumbnail.className = 'thumbnail-item';
-            thumbnail.dataset.page = pageNum;
-            thumbnail.style.backgroundImage = `url(${canvas.toDataURL('image/jpeg', 0.8)})`;
-            thumbnail.style.backgroundSize = 'cover';
-            thumbnail.style.backgroundPosition = 'center';
-            
-            const pageNumLabel = document.createElement('div');
-            pageNumLabel.className = 'thumbnail-number';
-            pageNumLabel.textContent = pageNum;
-            
-            thumbnail.appendChild(pageNumLabel);
-            thumbnailBar.appendChild(thumbnail);
-            
-            // 点击缩略图跳转
-            thumbnail.addEventListener('click', () => {
-                queueRenderPage(pageNum);
-            });
-            
-            // 如果是第一页，设置为活动状态
-            if (pageNum === 1) {
-                thumbnail.classList.add('active');
+            try {
+                const page = await pdfDoc.getPage(pageNum);
+                const viewport = page.getViewport({ scale: 0.2 }); // 提高缩略图质量
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                
+                const renderContext = {
+                    canvasContext: canvas.getContext('2d'),
+                    viewport: viewport
+                };
+                
+                const renderTask = page.render(renderContext);
+                await renderTask.promise;
+                
+                // 创建缩略图元素
+                const thumbnail = document.createElement('div');
+                thumbnail.className = 'thumbnail-item';
+                thumbnail.dataset.page = pageNum;
+                thumbnail.style.backgroundImage = `url(${canvas.toDataURL('image/jpeg', 0.8)})`;
+                thumbnail.style.backgroundSize = 'cover';
+                thumbnail.style.backgroundPosition = 'center';
+                
+                const pageNumLabel = document.createElement('div');
+                pageNumLabel.className = 'thumbnail-number';
+                pageNumLabel.textContent = pageNum;
+                
+                thumbnail.appendChild(pageNumLabel);
+                thumbnailBar.appendChild(thumbnail);
+                
+                // 点击缩略图跳转
+                thumbnail.addEventListener('click', () => {
+                    renderPageDirect(pageNum);
+                });
+                
+                // 如果是第一页，设置为活动状态
+                if (pageNum === 1) {
+                    thumbnail.classList.add('active');
+                }
+                
+                return thumbnail;
+            } catch (error) {
+                console.error(`创建缩略图 ${pageNum} 时出错:`, error);
+                return null;
             }
-            
-            return thumbnail;
         }
         
         // 预加载相邻页面
@@ -1039,6 +1076,7 @@
             // 更新UI
             document.getElementById('pages_released').textContent = pagesReleased;
             updateMemoryUsage();
+            updateDebugInfo(`已释放未使用页面 | 保留页面: ${Array.from(pagesToKeep).join(', ')}`);
         }
         
         // 更新内存使用情况
@@ -1063,23 +1101,24 @@
             }
         }
         
-        // 队列渲染 - 修复页面跳转问题
+        // 直接渲染页面（不经过队列）
+        function renderPageDirect(num) {
+            if (num < 1 || num > pdfDoc.numPages) return;
+            renderQueue = []; // 清空队列
+            document.getElementById('render_queue').textContent = renderQueue.length;
+            renderPage(num);
+        }
+        
+        // 队列渲染
         function queueRenderPage(num) {
-            // 限制快速翻页
-            const now = Date.now();
-            if (now - lastPageChange < 300) return;
-            lastPageChange = now;
-            
-            // 忽略重复请求
-            if (currentPage === num && pageRendering) return;
-            
-            // 添加到队列（去重）
+            // 只添加不重复的页面请求
             if (!renderQueue.includes(num)) {
                 renderQueue.push(num);
                 document.getElementById('render_queue').textContent = renderQueue.length;
+                updateDebugInfo(`页面 ${num} 加入队列 | 队列长度: ${renderQueue.length}`);
             }
             
-            // 启动队列处理
+            // 如果当前没有在渲染，则开始渲染
             if (!pageRendering && !isProcessingQueue) {
                 isProcessingQueue = true;
                 processRenderQueue();
@@ -1095,19 +1134,20 @@
             
             const nextPage = renderQueue.shift();
             document.getElementById('render_queue').textContent = renderQueue.length;
+            updateDebugInfo(`处理队列，渲染页面: ${nextPage}`);
             renderPage(nextPage);
         }
         
         // 上一页
         function onPrevPage() {
             if (currentPage <= 1) return;
-            queueRenderPage(currentPage - 1);
+            renderPageDirect(currentPage - 1);
         }
         
         // 下一页
         function onNextPage() {
             if (currentPage >= pdfDoc.numPages) return;
-            queueRenderPage(currentPage + 1);
+            renderPageDirect(currentPage + 1);
         }
         
         // 放大
@@ -1142,8 +1182,7 @@
             const pageNum = parseInt(pageInput.value);
             
             if (pageNum > 0 && pageNum <= pdfDoc.numPages) {
-                isJumping = true; // 标记为跳转操作
-                queueRenderPage(pageNum);
+                renderPageDirect(pageNum);
             } else {
                 alert(`无效的页码，请输入1-${pdfDoc.numPages}之间的数字`);
             }
@@ -1194,6 +1233,7 @@
             loader.style.opacity = '1';
             loadingProgress.style.width = '0%';
             loadingText.textContent = '初始化PDF查看器';
+            updateDebugInfo("开始加载PDF...");
             
             // 重置缓存
             pageCache.clear();
@@ -1203,7 +1243,7 @@
             renderQueue = [];
             isProcessingQueue = false;
             pagesReleased = 0;
-            isInitialRender = true;
+            currentPage = 1;
             
             // 从URL获取PDF文件名
             const urlParams = new URLSearchParams(window.location.search);
@@ -1256,6 +1296,7 @@
                 pdfDoc = pdf;
                 pageCountSpan.textContent = pdf.numPages;
                 totalPagesSpan.textContent = pdf.numPages;
+                updateDebugInfo(`PDF加载完成，总页数: ${pdf.numPages}`);
                 
                 // 更新文件信息
                 pdf.getMetadata().then(function(metadata) {
@@ -1303,6 +1344,7 @@
                 console.error('PDF加载失败:', error);
                 loadingText.textContent = `加载失败: ${error.message}`;
                 loadingProgress.style.background = 'red';
+                updateDebugInfo(`PDF加载失败: ${error.message}`);
             });
         }
         
@@ -1318,6 +1360,7 @@
                 pdfDoc = pdf;
                 pageCountSpan.textContent = pdf.numPages;
                 totalPagesSpan.textContent = pdf.numPages;
+                updateDebugInfo(`PDF处理完成，总页数: ${pdf.numPages}`);
                 
                 // 更新文件信息
                 pdf.getMetadata().then(function(metadata) {
@@ -1346,6 +1389,7 @@
                 console.error('处理PDF数据失败:', error);
                 loadingText.textContent = `处理失败: ${error.message}`;
                 loadingProgress.style.background = 'red';
+                updateDebugInfo(`PDF处理失败: ${error.message}`);
             });
         }
         
