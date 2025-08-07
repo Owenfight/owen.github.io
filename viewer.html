@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>高级PDF作品集查看器 | 优化版</title>
+    <title>优化版PDF作品集查看器</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         /* 重置与基础样式 */
@@ -578,7 +578,7 @@
 </head>
 <body>
     <!-- 连接状态指示器 -->
-    <div class="connection-status connection-good" id="connectionStatus">
+    <div class="connection-status" id="connectionStatus">
         <i class="fas fa-signal"></i> <span>网络: 良好</span>
     </div>
     
@@ -784,7 +784,7 @@
         };
         
         // 本地缓存对象
-        let pdfCache = localStorage.getItem('pdfCache') ? JSON.parse(localStorage.getItem('pdfCache')) : {};
+        const pdfCache = localStorage.getItem('pdfCache') ? JSON.parse(localStorage.getItem('pdfCache')) : {};
         
         // 更新加载进度
         function updateProgress(loaded, total) {
@@ -909,7 +909,7 @@
                 await renderTask.promise;
                 
                 // 缓存页面
-                pageCache.set(num, { container, canvas, ctx, page, viewport });
+                pageCache.set(num, { container, canvas, ctx, page, viewport, renderTask });
                 renderedPages.add(num);
                 
                 container.classList.remove('loading');
@@ -1065,17 +1065,25 @@
         
         // 队列渲染 - 修复页面跳转问题
         function queueRenderPage(num) {
-            // 清空队列
-            renderQueue = [];
+            // 清空队列，只保留当前请求
+            renderQueue = [num];
             document.getElementById('render_queue').textContent = renderQueue.length;
             
-            // 更新页码显示
-            currentPage = num;
-            pageNumSpan.textContent = num;
-            currentPageNumSpan.textContent = num;
-            
-            // 直接渲染目标页面
-            renderPage(num);
+            // 如果当前没有在渲染，则开始渲染
+            if (!pageRendering) {
+                renderPage(num);
+            } else {
+                // 如果正在渲染，取消当前任务
+                if (pageCache.has(currentPage)) {
+                    const { renderTask } = pageCache.get(currentPage);
+                    if (renderTask && !renderTask._internalRenderTask.complete) {
+                        renderTask.cancel();
+                        console.log(`取消页面 ${currentPage} 的渲染`);
+                        pageRendering = false;
+                        renderPage(num);
+                    }
+                }
+            }
         }
         
         // 上一页
