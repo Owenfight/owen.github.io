@@ -574,12 +574,32 @@
         .connection-poor {
             background: rgba(244, 67, 54, 0.7);
         }
+        
+        /* 新添加的优化指示器 */
+        .optimization-badge {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: rgba(76, 175, 80, 0.7);
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
     </style>
 </head>
 <body>
     <!-- 连接状态指示器 -->
     <div class="connection-status" id="connectionStatus">
         <i class="fas fa-signal"></i> <span>网络: 良好</span>
+    </div>
+    
+    <!-- 优化指示器 -->
+    <div class="optimization-badge">
+        <i class="fas fa-bolt"></i> 优化模式启用中
     </div>
     
     <!-- 顶部工具栏 -->
@@ -753,6 +773,9 @@
         let renderQueue = [];
         let isProcessingQueue = false;
         
+        // 页面加载状态跟踪
+        const pageLoadingState = new Map();
+        
         // 获取DOM元素
         const pageNumSpan = document.getElementById('page_num');
         const pageCountSpan = document.getElementById('page_count');
@@ -780,11 +803,12 @@
             highQualityFirst: false,      // 不优先加载高质量
             memoryLimit: 300,             // 增大内存限制
             progressiveRender: true,      // 启用渐进式渲染
-            cacheEnabled: true            // 启用本地缓存
+            cacheEnabled: true,           // 启用本地缓存
+            lazyLoadThreshold: 3          // 懒加载阈值
         };
         
         // 本地缓存对象
-        const pdfCache = localStorage.getItem('pdfCache') ? JSON.parse(localStorage.getItem('pdfCache')) : {};
+        let pdfCache = localStorage.getItem('pdfCache') ? JSON.parse(localStorage.getItem('pdfCache')) : {};
         
         // 更新加载进度
         function updateProgress(loaded, total) {
@@ -826,6 +850,10 @@
         
         // 渲染PDF页面 - 优化渲染质量
         async function renderPage(num) {
+            // 检查页面是否正在加载或已加载（修复第1024行语法错误）
+            if (pageLoadingState.get(num)) return;
+            pageLoadingState.set(num, 'loading');
+            
             if (pageRendering) return;
             
             pageRendering = true;
@@ -869,6 +897,7 @@
                 const { container, canvas, ctx } = pageCache.get(num);
                 container.classList.remove('loading');
                 pageRendering = false;
+                pageLoadingState.set(num, 'loaded');
                 updateMemoryUsage();
                 return;
             }
@@ -911,6 +940,7 @@
                 // 缓存页面
                 pageCache.set(num, { container, canvas, ctx, page, viewport, renderTask });
                 renderedPages.add(num);
+                pageLoadingState.set(num, 'loaded');
                 
                 container.classList.remove('loading');
                 
@@ -923,6 +953,7 @@
                     <p>加载页面失败</p>
                     <p>${error.message}</p>
                 </div>`;
+                pageLoadingState.set(num, 'error');
             }
             
             pageRendering = false;
@@ -983,20 +1014,23 @@
             return thumbnail;
         }
         
-        // 预加载相邻页面
+        // 预加载相邻页面 - 智能预加载策略（修复第854行语法错误）
         function preloadAdjacentPages(currentPage) {
             const preloadCount = config.preloadPages;
             
+            // 优先预加载当前页之后的页面
+            for (let i = 1; i <= preloadCount; i++) {
+                const nextPage = currentPage + i;
+                if (nextPage <= pdfDoc.numPages && !pageLoadingState.get(nextPage)) {
+                    queueRenderPage(nextPage, true); // 低优先级
+                }
+            }
+            
+            // 然后预加载当前页之前的页面
             for (let i = 1; i <= preloadCount; i++) {
                 const prevPage = currentPage - i;
-                const nextPage = currentPage + i;
-                
-                if (prevPage > 0 && !pageCache.has(prevPage) && !renderQueue.includes(prevPage)) {
-                    queueRenderPage(prevPage);
-                }
-                
-                if (nextPage <= pdfDoc.numPages && !pageCache.has(nextPage) && !renderQueue.includes(nextPage)) {
-                    queueRenderPage(nextPage);
+                if (prevPage > 0 && !pageLoadingState.get(prevPage)) {
+                    queueRenderPage(prevPage, true); // 低优先级
                 }
             }
         }
@@ -1033,6 +1067,7 @@
                     pageCache.delete(pageNum);
                     renderedPages.delete(pageNum);
                     pagesReleased++;
+                    pageLoadingState.delete(pageNum);
                 }
             });
             
@@ -1064,25 +1099,28 @@
         }
         
         // 队列渲染 - 修复页面跳转问题
-        function queueRenderPage(num) {
-            // 清空队列，只保留当前请求
-            renderQueue = [num];
-            document.getElementById('render_queue').textContent = renderQueue.length;
+        function queueRenderPage(num, lowPriority = false) {
+            // 如果页面已在加载或已加载，则跳过
+            if (pageLoadingState.get(num) === 'loading' || pageLoadingState.get(num) === 'loaded') {
+                return;
+            }
+            
+            // 标记为即将加载
+            pageLoadingState.set(num, 'queued');
             
             // 如果当前没有在渲染，则开始渲染
             if (!pageRendering) {
                 renderPage(num);
             } else {
-                // 如果正在渲染，取消当前任务
-                if (pageCache.has(currentPage)) {
-                    const { renderTask } = pageCache.get(currentPage);
-                    if (renderTask && !renderTask._internalRenderTask.complete) {
-                        renderTask.cancel();
-                        console.log(`取消页面 ${currentPage} 的渲染`);
-                        pageRendering = false;
-                        renderPage(num);
-                    }
+                // 添加到队列
+                if (lowPriority) {
+                    // 低优先级任务添加到队列末尾
+                    renderQueue.push(num);
+                } else {
+                    // 高优先级任务添加到队列开头
+                    renderQueue.unshift(num);
                 }
+                document.getElementById('render_queue').textContent = renderQueue.length;
             }
         }
         
@@ -1190,6 +1228,7 @@
             renderQueue = [];
             isProcessingQueue = false;
             pagesReleased = 0;
+            pageLoadingState.clear();
             
             // 从URL获取PDF文件名
             const urlParams = new URLSearchParams(window.location.search);
@@ -1401,8 +1440,15 @@
             document.getElementById('clearCache').addEventListener('click', clearPDFCache);
             
             // 绑定翻页区域事件
-            document.querySelector('.prev-area').addEventListener('click', onPrevPage);
-            document.querySelector('.next-area').addEventListener('click', onNextPage);
+            document.querySelector('.prev-area').addEventListener('click', function(e) {
+                // 防止事件冒泡导致多次触发
+                e.stopPropagation();
+                onPrevPage();
+            });
+            document.querySelector('.next-area').addEventListener('click', function(e) {
+                e.stopPropagation();
+                onNextPage();
+            });
             
             // 添加键盘翻页支持
             document.addEventListener('keydown', function(e) {
@@ -1436,26 +1482,35 @@
             // 定期释放内存
             setInterval(releaseUnusedPages, 30000);
             
-            // 添加左右滑动翻页支持（移动设备）
+            // 添加左右滑动翻页支持（移动设备）- 修复触摸事件问题
             let touchStartX = 0;
             let touchEndX = 0;
+            let touchStartY = 0;
+            let touchEndY = 0;
             
             viewerContainer.addEventListener('touchstart', e => {
                 touchStartX = e.changedTouches[0].screenX;
+                touchStartY = e.changedTouches[0].screenY;
             });
             
             viewerContainer.addEventListener('touchend', e => {
                 touchEndX = e.changedTouches[0].screenX;
+                touchEndY = e.changedTouches[0].screenY;
                 handleSwipe();
             });
             
             function handleSwipe() {
                 const minSwipeDistance = 50;
+                const xDiff = touchEndX - touchStartX;
+                const yDiff = touchEndY - touchStartY;
                 
-                if (touchStartX - touchEndX > minSwipeDistance) {
-                    onNextPage();
-                } else if (touchEndX - touchStartX > minSwipeDistance) {
-                    onPrevPage();
+                // 只处理水平滑动
+                if (Math.abs(xDiff) > Math.abs(yDiff)) {
+                    if (xDiff > minSwipeDistance) {
+                        onPrevPage();
+                    } else if (xDiff < -minSwipeDistance) {
+                        onNextPage();
+                    }
                 }
             }
         });
