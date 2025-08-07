@@ -1023,16 +1023,19 @@
             }
         }
         
-        // 队列渲染
+        // 队列渲染 - 修复页面跳转问题
         function queueRenderPage(num) {
-            if (pageRendering) {
-                // 如果正在渲染，将任务加入队列
-                if (!renderQueue.includes(num)) {
-                    renderQueue.push(num);
-                    document.getElementById('render_queue').textContent = renderQueue.length;
-                }
-            } else {
-                // 如果没有渲染任务，立即开始渲染
+            // 如果请求的页面就是当前正在渲染的页面，则忽略
+            if (num === currentPage && pageRendering) {
+                return;
+            }
+            
+            // 清空队列，只保留当前请求
+            renderQueue = [num];
+            document.getElementById('render_queue').textContent = renderQueue.length;
+            
+            // 如果当前没有在渲染，则开始渲染
+            if (!pageRendering) {
                 renderPage(num);
             }
         }
