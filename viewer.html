@@ -635,7 +635,7 @@
     </div>
     
     <!-- 翻页区域 -->
-    <div class="page-nav-area prev-area" id="prevArea">
+    <div class="page-nav-area prev-area">
         <div class="nav-hint prev-hint">◀</div>
     </div>
     
@@ -644,7 +644,7 @@
         <!-- PDF页面将动态添加到这里 -->
     </div>
     
-    <div class="page-nav-area next-area" id="nextArea">
+    <div class="page-nav-area next-area">
         <div class="nav-hint next-hint">▶</div>
     </div>
     
@@ -769,8 +769,6 @@
         const totalPagesSpan = document.getElementById('totalPages');
         const performanceHint = document.getElementById('performanceHint');
         const connectionStatus = document.getElementById('connectionStatus');
-        const prevArea = document.getElementById('prevArea');
-        const nextArea = document.getElementById('nextArea');
         
         // PDF.js配置 - 优化后的配置
         const config = {
@@ -786,7 +784,7 @@
         };
         
         // 本地缓存对象
-        let pdfCache = localStorage.getItem('pdfCache') ? JSON.parse(localStorage.getItem('pdfCache')) : {};
+        const pdfCache = localStorage.getItem('pdfCache') ? JSON.parse(localStorage.getItem('pdfCache')) : {};
         
         // 更新加载进度
         function updateProgress(loaded, total) {
@@ -1067,21 +1065,25 @@
         
         // 队列渲染 - 修复页面跳转问题
         function queueRenderPage(num) {
-            // 如果正在渲染，直接加入队列
-            if (pageRendering) {
-                if (!renderQueue.includes(num)) {
-                    renderQueue.push(num);
-                    document.getElementById('render_queue').textContent = renderQueue.length;
-                }
-                return;
-            }
-            
             // 清空队列，只保留当前请求
             renderQueue = [num];
             document.getElementById('render_queue').textContent = renderQueue.length;
             
-            // 开始渲染
-            renderPage(num);
+            // 如果当前没有在渲染，则开始渲染
+            if (!pageRendering) {
+                renderPage(num);
+            } else {
+                // 如果正在渲染，取消当前任务
+                if (pageCache.has(currentPage)) {
+                    const { renderTask } = pageCache.get(currentPage);
+                    if (renderTask && !renderTask._internalRenderTask.complete) {
+                        renderTask.cancel();
+                        console.log(`取消页面 ${currentPage} 的渲染`);
+                        pageRendering = false;
+                        renderPage(num);
+                    }
+                }
+            }
         }
         
         // 上一页
@@ -1207,25 +1209,14 @@
                 
                 // 延迟显示以展示进度
                 setTimeout(() => {
-                    try {
-                        // 修复缓存处理问题
-                        const dataArray = new Uint8Array(cachedPdf.data);
-                        processPDFData(dataArray.buffer, pdfFile);
-                        loadingProgress.style.width = '100%';
-                    } catch (error) {
-                        console.error('缓存加载失败:', error);
-                        loadingText.textContent = `缓存加载失败: ${error.message}`;
-                        // 如果缓存加载失败，尝试重新从网络加载
-                        loadFromNetwork(pdfFile);
-                    }
+                    const data = new Uint8Array(cachedPdf.data);
+                    processPDFData(data.buffer, pdfFile);
+                    loadingProgress.style.width = '100%';
                 }, 500);
-            } else {
-                loadFromNetwork(pdfFile);
+                
+                return;
             }
-        }
-        
-        // 从网络加载PDF
-        function loadFromNetwork(pdfFile) {
+            
             // 设置PDF.js配置
             pdfjsLib.GlobalWorkerOptions.workerOptions = {
                 maxImageSize: config.maxImageSize,
@@ -1409,9 +1400,9 @@
             document.getElementById('releaseMemory').addEventListener('click', releaseUnusedPages);
             document.getElementById('clearCache').addEventListener('click', clearPDFCache);
             
-            // 绑定翻页区域事件 - 修复：使用事件委托
-            prevArea.addEventListener('click', onPrevPage);
-            nextArea.addEventListener('click', onNextPage);
+            // 绑定翻页区域事件
+            document.querySelector('.prev-area').addEventListener('click', onPrevPage);
+            document.querySelector('.next-area').addEventListener('click', onNextPage);
             
             // 添加键盘翻页支持
             document.addEventListener('keydown', function(e) {
@@ -1448,22 +1439,18 @@
             // 添加左右滑动翻页支持（移动设备）
             let touchStartX = 0;
             let touchEndX = 0;
-            let touchHandled = false;
             
             viewerContainer.addEventListener('touchstart', e => {
                 touchStartX = e.changedTouches[0].screenX;
-                touchHandled = false;
             });
             
             viewerContainer.addEventListener('touchend', e => {
-                if (touchHandled) return;
                 touchEndX = e.changedTouches[0].screenX;
                 handleSwipe();
-                touchHandled = true;
             });
             
             function handleSwipe() {
-                const minSwipeDistance = 100;
+                const minSwipeDistance = 50;
                 
                 if (touchStartX - touchEndX > minSwipeDistance) {
                     onNextPage();
