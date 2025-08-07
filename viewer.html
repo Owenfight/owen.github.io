@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>优化版PDF作品集查看器 - 翻页问题已修复</title>
+    <title>优化版PDF作品集查看器</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         /* 重置与基础样式 */
@@ -1207,14 +1207,25 @@
                 
                 // 延迟显示以展示进度
                 setTimeout(() => {
-                    const data = new Uint8Array(cachedPdf.data);
-                    processPDFData(data.buffer, pdfFile);
-                    loadingProgress.style.width = '100%';
+                    try {
+                        // 修复缓存处理问题
+                        const dataArray = new Uint8Array(cachedPdf.data);
+                        processPDFData(dataArray.buffer, pdfFile);
+                        loadingProgress.style.width = '100%';
+                    } catch (error) {
+                        console.error('缓存加载失败:', error);
+                        loadingText.textContent = `缓存加载失败: ${error.message}`;
+                        // 如果缓存加载失败，尝试重新从网络加载
+                        loadFromNetwork(pdfFile);
+                    }
                 }, 500);
-                
-                return;
+            } else {
+                loadFromNetwork(pdfFile);
             }
-            
+        }
+        
+        // 从网络加载PDF
+        function loadFromNetwork(pdfFile) {
             // 设置PDF.js配置
             pdfjsLib.GlobalWorkerOptions.workerOptions = {
                 maxImageSize: config.maxImageSize,
