@@ -1160,15 +1160,38 @@
                     if (metadata.contentLength) {
                         fileSizeSpan.textContent = formatBytes(metadata.contentLength);
                         
+                        // 修改后的loadPDF函数片段
                         if (config.cacheEnabled) {
-                            fetch(pdfFile)
+                        // 先检查文件大小
+                            fetch(pdfFile, { method: 'HEAD' })
+                                .then(res => {
+                                    const size = parseInt(res.headers.get('content-length'));
+                                    if (size > 3 * 1024 * 1024) {
+                                        config.cacheEnabled = false;
+                                        updateCacheStatus(false);
+                                        console.log('文件过大禁用缓存');
+                                        return Promise.reject('File too large');
+                                    }
+                                    return fetch(pdfFile);
+                                })
                                 .then(response => response.arrayBuffer())
                                 .then(buffer => {
                                     pdfCache[pdfFile] = {
                                         data: Array.from(new Uint8Array(buffer)),
                                         expiry: Date.now() + 24 * 60 * 60 * 1000
                                     };
-                                    localStorage.setItem('pdfCache', JSON.stringify(pdfCache));
+            
+                                    try {
+                                        localStorage.setItem('pdfCache', JSON.stringify(pdfCache));
+                                    } catch (e) {
+                                        console.error('存储失败:', e);
+                                        clearOldCache();
+                                    }
+                                })
+                                .catch(error => {
+                                    if (error !== 'File too large') {
+                                        console.error('缓存失败:', error);
+                                    }
                                 });
                         }
                     }
