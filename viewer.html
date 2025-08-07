@@ -404,6 +404,18 @@
             border-radius: 3px;
         }
         
+        .cache-status {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            display: none;
+        }
+        
+        .cache-disabled {
+            color: #ff6b6b;
+        }
+        
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -411,7 +423,7 @@
         
         @keyframes loadingBg {
             0% { background-position: 0 0; }
-            100% { background-position: 40px 40px; }
+            100% { background-position: 40px 40px;}
         }
         
         @media (min-width: 768px) {
@@ -435,6 +447,10 @@
             body.fullscreen #viewerContainer {
                 top: 60px;
                 height: calc(100vh - 60px);
+            }
+            
+            .cache-status {
+                display: block;
             }
         }
         
@@ -565,6 +581,11 @@
             align-items: center;
             gap: 5px;
         }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -614,11 +635,16 @@
             </button>
         </div>
         
-        <div class="file-info-card">
-            <h3>作品集信息</h3>
-            <div>文件大小: <span id="file_size">0 MB</span></div>
-            <div>分辨率: <span id="resolution">-</span></div>
-            <div>内存: <span id="memory_usage">0 MB</span></div>
+        <div class="toolbar-group">
+            <div class="cache-status" id="cacheStatus">
+                <i class="fas fa-database"></i> <span>缓存: 启用</span>
+            </div>
+            <div class="file-info-card">
+                <h3>作品集信息</h3>
+                <div>文件大小: <span id="file_size">0 MB</span></div>
+                <div>分辨率: <span id="resolution">-</span></div>
+                <div>内存: <span id="memory_usage">0 MB</span></div>
+            </div>
         </div>
     </div>
     
@@ -716,6 +742,15 @@
 
     <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
     <script>
+        // 缓存状态更新函数
+        function updateCacheStatus(enabled) {
+            const statusEl = document.getElementById('cacheStatus');
+            if (!statusEl) return;
+            
+            statusEl.innerHTML = `<i class="fas fa-database"></i> 缓存: ${enabled ? '启用' : '禁用'}`;
+            statusEl.classList.toggle('cache-disabled', !enabled);
+        }
+
         const pdfjsLib = window['pdfjs-dist/build/pdf'];
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
         let pdfDoc = null,
@@ -1102,6 +1137,20 @@
             }, 3000);
         }
         
+        function clearOldCache() {
+            const now = Date.now();
+            for (const url in pdfCache) {
+                if (pdfCache[url].expiry < now) {
+                    delete pdfCache[url];
+                }
+            }
+            try {
+                localStorage.setItem('pdfCache', JSON.stringify(pdfCache));
+            } catch (e) {
+                console.error('清理后存储仍然失败');
+            }
+        }
+        
         function loadPDF() {
             loader.style.display = 'flex';
             loader.style.opacity = '1';
@@ -1160,38 +1209,40 @@
                     if (metadata.contentLength) {
                         fileSizeSpan.textContent = formatBytes(metadata.contentLength);
                         
-                        // 修改后的loadPDF函数片段
                         if (config.cacheEnabled) {
-                        // 先检查文件大小
-                            fetch(pdfFile, { method: 'HEAD' })
-                                .then(res => {
-                                    const size = parseInt(res.headers.get('content-length'));
-                                    if (size > 3 * 1024 * 1024) {
-                                        config.cacheEnabled = false;
-                                        updateCacheStatus(false);
-                                        console.log('文件过大禁用缓存');
-                                        return Promise.reject('File too large');
-                                    }
-                                    return fetch(pdfFile);
-                                })
+                            fetch(pdfFile)
                                 .then(response => response.arrayBuffer())
                                 .then(buffer => {
+                                    // 检查文件大小
+                                    if (buffer.byteLength > 3 * 1024 * 1024) {
+                                        console.log('文件过大，跳过缓存');
+                                        config.cacheEnabled = false;
+                                        updateCacheStatus(false);
+                                        return;
+                                    }
+                                    
                                     pdfCache[pdfFile] = {
                                         data: Array.from(new Uint8Array(buffer)),
                                         expiry: Date.now() + 24 * 60 * 60 * 1000
                                     };
-            
+                                    
                                     try {
                                         localStorage.setItem('pdfCache', JSON.stringify(pdfCache));
                                     } catch (e) {
                                         console.error('存储失败:', e);
                                         clearOldCache();
+                                        try {
+                                            localStorage.setItem('pdfCache', JSON.stringify(pdfCache));
+                                        } catch (e2) {
+                                            console.error('重试存储失败，放弃缓存');
+                                            config.cacheEnabled = false;
+                                            updateCacheStatus(false);
+                                        }
                                     }
-                                })
-                                .catch(error => {
-                                    if (error !== 'File too large') {
-                                        console.error('缓存失败:', error);
-                                    }
+                                }).catch(error => {
+                                    console.error('缓存失败:', error);
+                                    config.cacheEnabled = false;
+                                    updateCacheStatus(false);
                                 });
                         }
                     }
@@ -1270,6 +1321,8 @@
             localStorage.removeItem('pdfCache');
             pdfCache = {};
             alert('PDF缓存已清除');
+            config.cacheEnabled = true;
+            updateCacheStatus(true);
             loadPDF();
         }
         
@@ -1303,6 +1356,9 @@
         }
         
         document.addEventListener('DOMContentLoaded', function() {
+            // 初始化缓存状态
+            updateCacheStatus(config.cacheEnabled);
+            
             detectNetworkSpeed();
             setInterval(detectNetworkSpeed, 30000);
             
@@ -1390,6 +1446,16 @@
                     }
                 }
             }
+            
+            // 全局错误处理
+            window.addEventListener('error', function(event) {
+                console.error('全局错误:', event.error);
+            });
+            
+            window.addEventListener('unhandledrejection', function(event) {
+                console.error('未处理的Promise拒绝:', event.reason);
+                event.preventDefault();
+            });
         });
     </script>
 </body>
