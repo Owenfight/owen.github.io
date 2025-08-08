@@ -742,7 +742,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
     <script>
-        // 缓存状态更新函数
+        // 缓存状态更新函数 - 移到全局作用域顶部
         function updateCacheStatus(enabled) {
             const statusEl = document.getElementById('cacheStatus');
             if (!statusEl) return;
@@ -1175,14 +1175,28 @@
                 loadingText.textContent = '从缓存加载PDF...';
                 
                 setTimeout(() => {
-                    const data = new Uint8Array(cachedPdf.data);
-                    processPDFData(data.buffer, pdfFile);
-                    loadingProgress.style.width = '100%';
+                    try {
+                        const data = new Uint8Array(cachedPdf.data);
+                        processPDFData(data.buffer, pdfFile);
+                        loadingProgress.style.width = '100%';
+                    } catch (e) {
+                        console.error('处理缓存数据失败:', e);
+                        // 缓存无效，重新加载
+                        config.cacheEnabled = false;
+                        updateCacheStatus(false);
+                        loadWithoutCache(pdfFile);
+                    }
                 }, 500);
                 
                 return;
             }
             
+            // 没有缓存或缓存无效，正常加载
+            loadWithoutCache(pdfFile);
+        }
+        
+        // 新增无缓存加载函数
+        function loadWithoutCache(pdfFile) {
             pdfjsLib.GlobalWorkerOptions.workerOptions = {
                 maxImageSize: config.maxImageSize,
                 disableFontFace: config.disableFontFace
@@ -1209,43 +1223,11 @@
                     if (metadata.contentLength) {
                         fileSizeSpan.textContent = formatBytes(metadata.contentLength);
                         
-                        if (config.cacheEnabled) {
-                            fetch(pdfFile)
-                                .then(response => response.arrayBuffer())
-                                .then(buffer => {
-                                    // 检查文件大小
-                                    if (buffer.byteLength > 3 * 1024 * 1024) {
-                                        console.log('文件过大，跳过缓存');
-                                        config.cacheEnabled = false;
-                                        updateCacheStatus(false);
-                                        return;
-                                    }
-                                    
-                                    pdfCache[pdfFile] = {
-                                        data: Array.from(new Uint8Array(buffer)),
-                                        expiry: Date.now() + 24 * 60 * 60 * 1000
-                                    };
-                                    
-                                    try {
-                                        localStorage.setItem('pdfCache', JSON.stringify(pdfCache));
-                                    } catch (e) {
-                                        console.error('存储失败:', e);
-                                        clearOldCache();
-                                        try {
-                                            localStorage.setItem('pdfCache', JSON.stringify(pdfCache));
-                                        } catch (e2) {
-                                            console.error('重试存储失败，放弃缓存');
-                                            config.cacheEnabled = false;
-                                            updateCacheStatus(false);
-                                        }
-                                    }
-                                }).catch(error => {
-                                    console.error('缓存失败:', error);
-                                    config.cacheEnabled = false;
-                                    updateCacheStatus(false);
-                                });
-                        }
+                        // 缓存处理
+                        handleCaching(pdfFile);
                     }
+                }).catch(() => {
+                    // 元数据获取失败不影响主要功能
                 });
                 
                 const thumbnailPromises = [];
@@ -1274,6 +1256,47 @@
                     loadPDF();
                 }, 1000);
             });
+        }
+        
+        // 新增缓存处理函数
+        function handleCaching(pdfFile) {
+            if (!config.cacheEnabled) return;
+            
+            fetch(pdfFile)
+                .then(response => response.arrayBuffer())
+                .then(buffer => {
+                    // 检查文件大小
+                    if (buffer.byteLength > 3 * 1024 * 1024) {
+                        console.log('文件过大，跳过缓存');
+                        config.cacheEnabled = false;
+                        updateCacheStatus(false);
+                        return;
+                    }
+                    
+                    pdfCache[pdfFile] = {
+                        data: Array.from(new Uint8Array(buffer)),
+                        expiry: Date.now() + 24 * 60 * 60 * 1000
+                    };
+                    
+                    try {
+                        localStorage.setItem('pdfCache', JSON.stringify(pdfCache));
+                    } catch (e) {
+                        console.error('存储失败:', e);
+                        // 清理旧缓存并重试
+                        clearOldCache();
+                        try {
+                            localStorage.setItem('pdfCache', JSON.stringify(pdfCache));
+                        } catch (e2) {
+                            console.error('重试存储失败，放弃缓存');
+                            config.cacheEnabled = false;
+                            updateCacheStatus(false);
+                        }
+                    }
+                }).catch(error => {
+                    console.error('缓存失败:', error);
+                    config.cacheEnabled = false;
+                    updateCacheStatus(false);
+                });
         }
         
         function processPDFData(data, url) {
