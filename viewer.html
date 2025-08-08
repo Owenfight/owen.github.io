@@ -742,13 +742,31 @@
 
     <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
     <script>
-        // 缓存状态更新函数 - 移到全局作用域顶部
+        // 缓存状态更新函数 - 确保在全局作用域
         function updateCacheStatus(enabled) {
             const statusEl = document.getElementById('cacheStatus');
             if (!statusEl) return;
             
             statusEl.innerHTML = `<i class="fas fa-database"></i> 缓存: ${enabled ? '启用' : '禁用'}`;
             statusEl.classList.toggle('cache-disabled', !enabled);
+        }
+
+        // 显示错误信息
+        function showError(message) {
+            const loader = document.getElementById('loader');
+            loader.innerHTML = `
+                <div style="text-align: center; padding: 30px; color: #ff6b6b;">
+                    <i class="fas fa-exclamation-triangle fa-3x"></i>
+                    <h2>加载失败</h2>
+                    <p>${message}</p>
+                    <button id="retryButton" style="margin-top: 20px; padding: 10px 20px; 
+                        background: var(--accent); color: white; border: none; border-radius: 5px; cursor: pointer;">
+                        重试
+                    </button>
+                </div>
+            `;
+            
+            document.getElementById('retryButton').addEventListener('click', loadPDF);
         }
 
         const pdfjsLib = window['pdfjs-dist/build/pdf'];
@@ -932,44 +950,58 @@
         }
         
         async function createThumbnail(pageNum) {
-            const page = await pdfDoc.getPage(pageNum);
-            const viewport = page.getViewport({ scale: 0.2 });
-            
-            const canvas = document.createElement('canvas');
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-            
-            const renderContext = {
-                canvasContext: canvas.getContext('2d'),
-                viewport: viewport
-            };
-            
-            const renderTask = page.render(renderContext);
-            await renderTask.promise;
-            
-            const thumbnail = document.createElement('div');
-            thumbnail.className = 'thumbnail-item';
-            thumbnail.dataset.page = pageNum;
-            thumbnail.style.backgroundImage = `url(${canvas.toDataURL('image/jpeg', 0.8)})`;
-            thumbnail.style.backgroundSize = 'cover';
-            thumbnail.style.backgroundPosition = 'center';
-            
-            const pageNumLabel = document.createElement('div');
-            pageNumLabel.className = 'thumbnail-number';
-            pageNumLabel.textContent = pageNum;
-            
-            thumbnail.appendChild(pageNumLabel);
-            thumbnailBar.appendChild(thumbnail);
-            
-            thumbnail.addEventListener('click', () => {
-                queueRenderPage(pageNum);
-            });
-            
-            if (pageNum === 1) {
-                thumbnail.classList.add('active');
+            try {
+                const page = await pdfDoc.getPage(pageNum);
+                const viewport = page.getViewport({ scale: 0.2 });
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                
+                const renderContext = {
+                    canvasContext: canvas.getContext('2d'),
+                    viewport: viewport
+                };
+                
+                const renderTask = page.render(renderContext);
+                await renderTask.promise;
+                
+                const thumbnail = document.createElement('div');
+                thumbnail.className = 'thumbnail-item';
+                thumbnail.dataset.page = pageNum;
+                thumbnail.style.backgroundImage = `url(${canvas.toDataURL('image/jpeg', 0.8)})`;
+                thumbnail.style.backgroundSize = 'cover';
+                thumbnail.style.backgroundPosition = 'center';
+                
+                const pageNumLabel = document.createElement('div');
+                pageNumLabel.className = 'thumbnail-number';
+                pageNumLabel.textContent = pageNum;
+                
+                thumbnail.appendChild(pageNumLabel);
+                thumbnailBar.appendChild(thumbnail);
+                
+                thumbnail.addEventListener('click', () => {
+                    queueRenderPage(pageNum);
+                });
+                
+                if (pageNum === 1) {
+                    thumbnail.classList.add('active');
+                }
+                
+                return thumbnail;
+            } catch (error) {
+                console.error('创建缩略图失败:', error);
+                return null;
             }
+        }
+        
+        function createThumbnails() {
+            thumbnailBar.innerHTML = '';
+            const pagesToLoad = Math.min(Math.max(5, pdfDoc.numPages), 20);
             
-            return thumbnail;
+            for (let i = 1; i <= pagesToLoad; i++) {
+                createThumbnail(i);
+            }
         }
         
         function preloadAdjacentPages(currentPage) {
@@ -1028,16 +1060,25 @@
             let memory = 0;
             pageCache.forEach((value, pageNum) => {
                 if (value.canvas) {
-                    memory += value.canvas.width * value.canvas.height * 4;
+                    memory += value.canvas.width * value.canvas.height * 4; // RGBA
+                }
+                if (value.page) {
+                    // 估算PDF.js页面对象内存
+                    memory += 2 * 1024 * 1024; // 每页约2MB
                 }
             });
+            
+            // 添加PDF文档本身的内存估算
+            if (pdfDoc) {
+                memory += 5 * 1024 * 1024; // 基础文档内存
+            }
             
             const memoryMB = Math.round(memory / (1024 * 1024));
             memoryUsageSpan.textContent = `${memoryMB} MB`;
             document.getElementById('current_memory').textContent = memoryMB;
             document.getElementById('memory_limit').textContent = config.memoryLimit;
             
-            if (memoryMB > config.memoryLimit) {
+            if (memoryMB > config.memoryLimit * 0.8) {
                 releaseUnusedPages();
             }
         }
@@ -1128,6 +1169,21 @@
             config.progressiveRender = document.getElementById('progressiveRender').checked;
             config.cacheEnabled = true;
             
+            // 清理现有PDF实例
+            if (pdfDoc) {
+                pdfDoc.destroy();
+                pdfDoc = null;
+            }
+            
+            // 清除页面缓存
+            pageCache.clear();
+            renderedPages.clear();
+            viewerContainer.innerHTML = '';
+            
+            // 重置缩放
+            scale = 1.5;
+            
+            // 重新加载
             loadPDF();
             configPanel.style.display = 'none';
             
@@ -1152,6 +1208,10 @@
         }
         
         function loadPDF() {
+            // 重置加载标志
+            window.pdfLoadStarted = false;
+            window.isLoadingFromCache = false;
+            
             loader.style.display = 'flex';
             loader.style.opacity = '1';
             loadingProgress.style.width = '0%';
@@ -1174,6 +1234,9 @@
                 console.log('从缓存加载PDF');
                 loadingText.textContent = '从缓存加载PDF...';
                 
+                // 使用标志防止重复加载
+                window.isLoadingFromCache = true;
+                
                 setTimeout(() => {
                     try {
                         const data = new Uint8Array(cachedPdf.data);
@@ -1181,17 +1244,23 @@
                         loadingProgress.style.width = '100%';
                     } catch (e) {
                         console.error('处理缓存数据失败:', e);
-                        // 缓存无效，重新加载
-                        config.cacheEnabled = false;
-                        updateCacheStatus(false);
-                        loadWithoutCache(pdfFile);
+                        // 确保只加载一次
+                        if (!window.pdfLoadStarted) {
+                            window.pdfLoadStarted = true;
+                            config.cacheEnabled = false;
+                            updateCacheStatus(false);
+                            loadWithoutCache(pdfFile);
+                        }
+                    } finally {
+                        window.isLoadingFromCache = false;
                     }
                 }, 500);
                 
                 return;
             }
             
-            // 没有缓存或缓存无效，正常加载
+            // 设置加载标志
+            window.pdfLoadStarted = true;
             loadWithoutCache(pdfFile);
         }
         
@@ -1230,10 +1299,8 @@
                     // 元数据获取失败不影响主要功能
                 });
                 
-                const thumbnailPromises = [];
-                for (let i = 1; i <= Math.min(10, pdf.numPages); i++) {
-                    thumbnailPromises.push(createThumbnail(i));
-                }
+                // 创建缩略图
+                createThumbnails();
                 
                 renderPage(currentPage);
                 
@@ -1249,12 +1316,8 @@
                     performanceHint.style.display = 'none';
                 }, 3000);
             }).catch(function(error) {
-                console.error('PDF加载失败，尝试重试:', error);
-                loadingText.textContent = `加载失败，正在重试...`;
-                
-                setTimeout(() => {
-                    loadPDF();
-                }, 1000);
+                console.error('PDF加载失败:', error);
+                showError(`加载失败: ${error.message}`);
             });
         }
         
@@ -1317,10 +1380,8 @@
                     }
                 });
                 
-                const thumbnailPromises = [];
-                for (let i = 1; i <= Math.min(10, pdf.numPages); i++) {
-                    thumbnailPromises.push(createThumbnail(i));
-                }
+                // 创建缩略图
+                createThumbnails();
                 
                 renderPage(currentPage);
                 
@@ -1331,12 +1392,8 @@
                     }, 500);
                 }, 500);
             }).catch(function(error) {
-                console.error('处理PDF数据失败，尝试重试:', error);
-                loadingText.textContent = `处理失败，正在重试...`;
-                
-                setTimeout(() => {
-                    loadPDF();
-                }, 1000);
+                console.error('处理PDF数据失败:', error);
+                showError(`处理PDF数据失败: ${error.message}`);
             });
         }
         
@@ -1473,10 +1530,12 @@
             // 全局错误处理
             window.addEventListener('error', function(event) {
                 console.error('全局错误:', event.error);
+                showError(`发生错误: ${event.message}`);
             });
             
             window.addEventListener('unhandledrejection', function(event) {
                 console.error('未处理的Promise拒绝:', event.reason);
+                showError(`未处理的错误: ${event.reason}`);
                 event.preventDefault();
             });
         });
